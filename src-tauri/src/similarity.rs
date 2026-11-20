@@ -135,19 +135,33 @@ mod tests {
         let dir = PathBuf::from(std::env::var("PHOTOVAULT_TEST_DIR")
             .expect("Define PHOTOVAULT_TEST_DIR con la ruta de las 65 fotos"));
         let mut images = Vec::new();
-        for entry in fs::read_dir(&dir).expect("No se puede abrir la carpeta") {
-            let path = entry.expect("Entrada inválida").path();
-            if !path.is_file() { continue; }
-            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            let mut parts = stem.splitn(3, '_');
-            let family = parts.next().unwrap_or("");
-            let variant = parts.next().unwrap_or("");
-            if !matches!(family, "F01" | "F02" | "F03" | "F04" | "F05") { continue; }
-            if variant.parse::<u8>().is_err() { continue; }
-            images.push((family.to_string(), variant.to_string(), path));
+        let mut stack = vec![dir.clone()];
+        let mut inspected_files = 0usize;
+        let mut unmatched_examples: Vec<String> = Vec::new();
+        while let Some(folder) = stack.pop() {
+            for entry in fs::read_dir(&folder).unwrap_or_else(|e| panic!("No se puede abrir {}: {e}", folder.display())) {
+                let path = entry.expect("Entrada inválida").path();
+                if path.is_dir() { stack.push(path); continue; }
+                if !path.is_file() { continue; }
+                inspected_files += 1;
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let mut parts = stem.splitn(3, '_');
+                let family = parts.next().unwrap_or("");
+                let variant = parts.next().unwrap_or("");
+                if !matches!(family, "F01" | "F02" | "F03" | "F04" | "F05")
+                    || variant.parse::<u8>().is_err()
+                    || !matches!(path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(), Some("jpg" | "jpeg" | "png" | "webp"))
+                {
+                    if unmatched_examples.len() < 8 { unmatched_examples.push(path.display().to_string()); }
+                    continue;
+                }
+                images.push((family.to_string(), variant.to_string(), path));
+            }
         }
         images.sort_by(|a,b| a.2.cmp(&b.2));
-        assert_eq!(images.len(), 65, "Se esperaban exactamente 65 fotografías etiquetadas");
+        assert_eq!(images.len(), 65,
+            "Se esperaban 65 fotografías etiquetadas. Carpeta: {}. Archivos encontrados: {}. Coincidencias F01_00...F05_12: {}. Ejemplos no reconocidos: {:?}. Verifica PHOTOVAULT_TEST_DIR.",
+            dir.display(), inspected_files, images.len(), unmatched_examples);
         let hashes: Vec<u64> = images.iter().map(|(_,_,p)| phash(p).expect("No se pudo calcular pHash")).collect();
         println!("\\nBENCHMARK PHOTOVAULT — {} fotografías", images.len());
         println!("Verdad de referencia: misma familia Fxx = misma captura editada; familias diferentes = tomas distintas.");
