@@ -108,6 +108,46 @@ function PhotoPreview({ root, path }: { root: string; path: string }) {
   </div>;
 }
 
+type PhotoDecision = { decision: string; reviewed_at: string; content_changed: boolean };
+function OrganizationItem({ root, file }: { root: string; file: PlannedFile }) {
+  const [saved, setSaved] = useState<PhotoDecision | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let active = true;
+    setSaved(null); setError("");
+    invoke<PhotoDecision | null>("get_photo_decision", { root, path: file.path })
+      .then(value => { if (active) setSaved(value); })
+      .catch(e => { if (active) setError(String(e)); });
+    return () => { active = false; };
+  }, [root, file.path]);
+  async function decide(decision: string) {
+    if (saving) return;
+    setSaving(true); setError("");
+    try {
+      await invoke("save_photo_decision", { root, path: file.path, decision });
+      setSaved(await invoke<PhotoDecision | null>("get_photo_decision", { root, path: file.path }));
+    } catch (e) { setError(String(e)); }
+    finally { setSaving(false); }
+  }
+  const names: Record<string,string> = { keep:"Conservar",photo:"Fotografía",snapshot:"Captura",review_later:"Revisar después" };
+  return <div className="duplicate-group">
+    <strong style={{overflowWrap:"anywhere"}}>{file.path.split(/[\\/]/).pop()}</strong>
+    <p>{file.reason}</p>
+    <p>Destino sugerido: <strong>{file.suggested_folder}</strong> · Fecha: {file.date_source}{file.width && file.height ? ` · ${file.width} × ${file.height}` : ""}</p>
+    {saved && <p><strong>Tu decisión anterior: {names[saved.decision] ?? saved.decision}</strong> · {saved.reviewed_at}{saved.content_changed ? " · El archivo cambió desde la revisión: confirmar nuevamente" : " · Archivo sin cambios detectados"}</p>}
+    <div className="actions" style={{flexWrap:"wrap"}}>
+      <button className="secondary" disabled={saving} onClick={() => decide("keep")}>Conservar</button>
+      <button className="secondary" disabled={saving} onClick={() => decide("photo")}>Es fotografía</button>
+      <button className="secondary" disabled={saving} onClick={() => decide("snapshot")}>Es captura</button>
+      <button className="secondary" disabled={saving} onClick={() => decide("review_later")}>Revisar después</button>
+      {saved && <button className="secondary" disabled={saving} onClick={() => decide("clear")}>Quitar decisión</button>}
+    </div>
+    {error && <p role="alert">{error}</p>}
+    <small style={{overflowWrap:"anywhere"}}>{file.path}</small>
+  </div>;
+}
+
 export default function App() {
   const [page, setPage] = useState<"library" | "duplicates" | "similar" | "organize">("library");
   const [folder, setFolder] = useState("");
@@ -211,17 +251,12 @@ export default function App() {
       {page === "organize" && organization && <section className="panel">
         <h2>Propuesta de organización · Solo lectura</h2>
         <p>Archivos analizados: {fmt(organization.analyzed)} · Omitidos por límite: {fmt(organization.skipped)} · Errores: {fmt(organization.errors)}</p>
-        <p>La fecha se extrae del nombre cuando existe. Esta versión todavía no verifica EXIF ni agrupa eventos; las carpetas son sugerencias provisionales. Ningún archivo se mueve, renombra ni elimina.</p>
+        <p>La fecha se extrae del nombre cuando existe. Esta versión todavía no verifica EXIF ni agrupa eventos; las carpetas son sugerencias provisionales. Tus decisiones se guardan en SQLite fuera de las fotos; ningún archivo se mueve, renombra ni elimina.</p>
         <div className="actions" style={{ flexWrap: "wrap" }}>
           <button className={organizeFilter === "all" ? "" : "secondary"} onClick={() => setOrganizeFilter("all")}>Todos ({fmt(organization.files.length)})</button>
           {organizationCategories.map(({key,title}) => <button key={key} className={organizeFilter === key ? "" : "secondary"} onClick={() => setOrganizeFilter(key)}>{title} ({fmt(organization.files.filter(f => f.category === key).length)})</button>)}
         </div>
-        {organization.files.filter(f => organizeFilter === "all" || f.category === organizeFilter).slice(0,100).map(f => <div className="duplicate-group" key={f.path}>
-          <strong style={{overflowWrap:"anywhere"}}>{f.path.split(/[\\/]/).pop()}</strong>
-          <p>{f.reason}</p>
-          <p>Destino sugerido: <strong>{f.suggested_folder}</strong> · Fecha: {f.date_source}{f.width && f.height ? ` · ${f.width} × ${f.height}` : ""}</p>
-          <small style={{overflowWrap:"anywhere"}}>{f.path}</small>
-        </div>)}
+        {organization.files.filter(f => organizeFilter === "all" || f.category === organizeFilter).slice(0,100).map(f => <OrganizationItem key={f.path} root={folder} file={f}/>)}
         <p>Se muestran como máximo 100 archivos del filtro seleccionado. Los demás permanecen incluidos en el resumen.</p>
       </section>}
       {page === "duplicates" && !duplicates && !busy && <section className="panel"><p>Ejecuta el análisis para encontrar archivos idénticos en la carpeta seleccionada.</p></section>}
