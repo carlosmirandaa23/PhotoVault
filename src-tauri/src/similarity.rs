@@ -61,6 +61,7 @@ fn phash_luma(img: &image::GrayImage) -> u64 {
     hash
 }
 
+#[cfg(test)]
 fn phash(path: &Path) -> Result<u64, String> {
     let reader = ImageReader::open(path).map_err(|e| e.to_string())?;
     let img = reader.decode().map_err(|e| e.to_string())?

@@ -1,7 +1,7 @@
 //! Persistent *advisory* hash cache. It never authorizes deletion or a duplicate verdict.
 //! A cache hit is still subjected to full byte comparison before being reported.
 use rusqlite::{params, Connection, OptionalExtension};
-use std::{fs, path::{Path, PathBuf}, time::{SystemTime, UNIX_EPOCH}};
+use std::{fs, path::Path, time::{SystemTime, UNIX_EPOCH}};
 
 pub struct HashCache { db: Connection }
 
@@ -55,6 +55,7 @@ impl HashCache {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
     #[test]
     fn cache_invalidation_by_size_and_mtime() {
         let path = std::env::temp_dir().join(format!("photovault-cache-test-{}.sqlite", std::process::id()));

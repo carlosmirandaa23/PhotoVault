@@ -82,6 +82,7 @@ fn is_media(path: &Path) -> bool {
     matches!(ext.as_str(), "jpg"|"jpeg"|"png"|"webp"|"gif"|"bmp"|"tif"|"tiff"|"heic"|"heif"|"avif"|"dng"|"cr2"|"nef"|"arw"|"raf"|"orf"|"rw2"|"mp4"|"mov"|"avi"|"mkv"|"mts"|"3gp")
 }
 
+#[cfg(test)]
 pub fn scan(root: &Path) -> Result<DuplicateReport, String> {
     scan_with_progress(root, &AtomicBool::new(false), |_, _, _| {})
 }
