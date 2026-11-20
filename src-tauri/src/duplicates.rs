@@ -159,7 +159,7 @@ mod tests {
 
     #[test]
     fn exact_duplicates_only_and_no_mutation() {
-        let dir = std::env::temp_dir().join(format!("photovault-test-{}-{}", std::process::id(), std::thread::current().name().unwrap_or("unit")));
+        let dir = std::env::temp_dir().join(format!("photovault-test-{}-{}", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
         fs::create_dir_all(&dir).unwrap();
         let a = dir.join("a.jpg");
         let b = dir.join("b.jpg");
