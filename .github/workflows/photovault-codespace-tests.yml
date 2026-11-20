@@ -1,0 +1,54 @@
+name: PhotoVault - Codespace tests (self-hosted only)
+
+# Manual execution only. No push/PR triggers and no GitHub-hosted runner.
+on:
+  workflow_dispatch:
+    inputs:
+      rust_tests:
+        description: "Run Rust unit tests (requires Tauri Linux dependencies)"
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: photovault-codespace-tests
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    name: Frontend and optional Rust tests
+    runs-on: [self-hosted, linux, x64, photovault-codespace]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout selected branch
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Environment
+        run: |
+          node --version
+          npm --version
+          if command -v cargo >/dev/null 2>&1; then cargo --version; else echo 'Cargo unavailable'; fi
+      - name: Install frontend dependencies
+        run: npm ci
+      - name: Build frontend
+        run: npm run build
+      - name: Rust unit tests
+        if: ${{ inputs.rust_tests }}
+        run: |
+          . "$HOME/.cargo/env" 2>/dev/null || true
+          cargo test --manifest-path src-tauri/Cargo.toml --lib
+      - name: Publish summary
+        if: always()
+        run: |
+          {
+            echo '## PhotoVault validation'
+            echo ''
+            echo "- Branch: ${GITHUB_REF_NAME}"
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Rust requested: ${{ inputs.rust_tests }}"
+            echo "- Runner: self-hosted Codespace (not GitHub-hosted)"
+          } >> "$GITHUB_STEP_SUMMARY"
