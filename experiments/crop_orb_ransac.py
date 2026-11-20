@@ -127,8 +127,8 @@ def main():
         if key == "FN" and len(false_negatives) < 12:
             false_negatives.append((images[i].name, images[j].name, inliers))
         for idx in (i, j):
-            if actual and images[idx].stem.split("__")[1] in ("07", "08"):
-                variants[images[idx].stem.split("__")[1]][key] += 1
+            if actual and images[idx].stem.split("__")[1][:2] in ("07", "08"):
+                variants[images[idx].stem.split("__")[1][:2]][key] += 1
         if args.csv:
             rows.append((images[i].name, images[j].name, int(actual), int(predicted),
                          matches, inliers, round(ratio, 4), key))
