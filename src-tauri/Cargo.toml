@@ -19,3 +19,5 @@ serde = { version = "1", features = ["derive"] }
 blake3 = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 dirs = "5"
+
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "bmp", "gif", "tiff"] }
