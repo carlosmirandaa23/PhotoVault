@@ -11,6 +11,7 @@ type DuplicateGroup = { size_bytes: number; paths: string[] };
 type DuplicateReport = { scanned_files: number; errors: number; groups: DuplicateGroup[]; redundant_bytes: number; cache_hits: number; hashes_computed: number; cache_available: boolean };
 const fmt = (n: number) => n.toLocaleString("es-MX");
 const gb = (n: number) => (n / 1073741824).toFixed(2) + " GB";
+const humanSize = (n: number) => n >= 1073741824 ? (n / 1073741824).toFixed(2) + " GB" : n >= 1048576 ? (n / 1048576).toFixed(2) + " MB" : n >= 1024 ? (n / 1024).toFixed(1) + " KB" : n + " B";
 
 type VisualGroup = { paths: string[]; maxDistance: number };
 
@@ -189,10 +190,10 @@ export default function App() {
       {page === "library" && result && <><div className="stats"><div className="stat"><span>Archivos multimedia</span><strong>{fmt(result.files)}</strong></div><div className="stat"><span>Espacio total</span><strong>{gb(result.bytes)}</strong></div><div className="stat"><span>Errores de acceso</span><strong>{result.errors}</strong></div></div>
         <section className="panel"><h2>Formatos encontrados</h2><div className="formats">{extensions.map(([ext,count]) => <div key={ext} className="format"><span>{ext.toUpperCase()}</span><strong>{fmt(count)}</strong></div>)}</div></section></>}
       {page === "duplicates" && !duplicates && !busy && <section className="panel"><p>Ejecuta el análisis para encontrar archivos idénticos en la carpeta seleccionada.</p></section>}
-      {page === "duplicates" && duplicates && <><div className="stats"><div className="stat"><span>Grupos exactos</span><strong>{fmt(duplicates.groups.length)}</strong></div><div className="stat"><span>Espacio redundante estimado</span><strong>{gb(duplicates.redundant_bytes)}</strong></div><div className="stat"><span>Hashes reutilizados</span><strong>{fmt(duplicates.cache_hits)}</strong></div></div>
+      {page === "duplicates" && duplicates && <><div className="stats"><div className="stat"><span>Grupos exactos</span><strong>{fmt(duplicates.groups.length)}</strong></div><div className="stat"><span>Espacio redundante estimado</span><strong>{humanSize(duplicates.redundant_bytes)}</strong></div><div className="stat"><span>Hashes reutilizados</span><strong>{fmt(duplicates.cache_hits)}</strong></div></div>
         <section className="panel"><h2>Duplicados confirmados · mismo contenido</h2><p>Hashes calculados: {fmt(duplicates.hashes_computed)} · Caché SQLite: {duplicates.cache_available ? "disponible" : "no disponible"} · Errores: {fmt(duplicates.errors)}</p><p>Confirmación de contenido idéntico mediante hash criptográfico al momento del análisis. El nombre, la ubicación y los metadatos del sistema de archivos pueden diferir. Ningún archivo será eliminado; los resultados pueden quedar obsoletos si cambia la biblioteca.</p>
         {duplicates.groups.length === 0 && <p>No se encontraron duplicados exactos.</p>}
-        {duplicates.groups.map((group, i) => <div className="duplicate-group" key={i}><strong>Grupo {i+1} · {fmt(group.paths.length)} copias · {gb(group.size_bytes)} por archivo</strong>{group.paths.map(path => <div className="duplicate-path" key={path} title={path}>{path}</div>)}</div>)}</section></>}
+        {duplicates.groups.map((group, i) => <div className="duplicate-group" key={i}><strong>Grupo {i+1} · {fmt(group.paths.length)} archivos · {humanSize(group.size_bytes)} por archivo · Contenido idéntico verificado</strong><div className="photo-grid">{group.paths.map(path => <div className="photo-grid-item" key={path}><PhotoPreview root={folder} path={path}/><div className="duplicate-path" title={path}>{path}</div></div>)}</div></div>)}</section></>}
       {page === "similar" && !similar && !busy && <section className="panel"><p>Ejecuta el análisis para descubrir fotografías visualmente similares.</p></section>}
       {page === "similar" && similar && <section className="panel similarity-results"><div className="section-heading"><span className="section-icon"><Sparkles size={21}/></span><div><h2>Posibles fotografías relacionadas</h2><p>Sugerencias experimentales de pHash · No equivalen a duplicados confirmados</p></div></div>
         <p>Analizadas: {fmt(similar.analyzed)} · Omitidas por límite de 3,000: {fmt(similar.skipped)} · Errores: {fmt(similar.errors)} · Umbral pHash: {similar.threshold}/64</p>
@@ -204,7 +205,7 @@ export default function App() {
         {similarityView === "groups" ? <>
           {visualGroups.length === 0 && <p>No se encontraron grupos visuales con al menos dos fotografías.</p>}
           {visualGroups.slice(0, visibleGroups).map((group,i) => <div className="duplicate-group visual-group" key={group.paths[0]}>
-            <strong>Grupo {i+1} · {fmt(group.paths.length)} fotografías · Distancia máxima interna {group.maxDistance}/64</strong>
+            <strong>Grupo {i+1} · {fmt(group.paths.length)} fotografías · Posible misma captura</strong><p>Distancia pHash máxima entre miembros: {group.maxDistance}/64 (menor indica mayor semejanza perceptual; no representa una probabilidad).</p>
             <div className="photo-grid">
               {group.paths.map((path,j) => <div key={path} className="photo-grid-item">
                 {j === 0 && <div className="reference-label">Primera coincidencia · no verificada como original</div>}
@@ -216,7 +217,7 @@ export default function App() {
         </> : <>
           {similar.pairs.length === 0 && <p>No se encontraron coincidencias dentro del umbral.</p>}
           {similar.pairs.slice(0, visiblePairs).map((pair,i) => <div className="duplicate-group" key={i}>
-            <strong>Pareja {i+1} · Distancia {pair.distance}/64</strong>
+            <strong>Pareja {i+1} · Posible relación visual · Distancia pHash {pair.distance}/64</strong>
             <div className="photo-pair">
               <PhotoPreview root={folder} path={pair.first} />
               <PhotoPreview root={folder} path={pair.second} />
