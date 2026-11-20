@@ -1,7 +1,7 @@
 //! Read-only photo organization proposal. No file operations except metadata/decoding.
 use image::ImageReader;
 use serde::Serialize;
-use std::{fs, path::{Path,PathBuf}, time::UNIX_EPOCH};
+use std::{fs, path::{Path,PathBuf}};
 
 const PHOTOS: &[&str] = &["jpg","jpeg","png","webp","bmp","gif","tif","tiff"];
 const VIDEOS: &[&str] = &["mp4","mov","avi","mkv","mts","3gp","m4v","wmv","m2ts","webm"];
