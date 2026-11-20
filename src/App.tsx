@@ -106,6 +106,7 @@ function PhotoPreview({ root, path }: { root: string; path: string }) {
 }
 
 export default function App() {
+  const [page, setPage] = useState<"library" | "duplicates" | "similar">("library");
   const [folder, setFolder] = useState("");
   const [result, setResult] = useState<ScanSummary | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateReport | null>(null);
@@ -122,13 +123,13 @@ export default function App() {
     setError("");
     try {
       const selected = await open({ directory: true, multiple: false, title: "Selecciona tu biblioteca de fotos" });
-      if (typeof selected === "string") { setFolder(selected); setResult(null); setDuplicates(null); setSimilar(null); }
+      if (typeof selected === "string") { setFolder(selected); setResult(null); setDuplicates(null); setSimilar(null); setPage("library"); }
     } catch (e) { setError(String(e)); }
   }
   async function scan() {
     if (!folder || busy) return;
     setBusy(true); setError(""); setResult(null); setDuplicates(null);
-    try { setResult(await invoke<ScanSummary>("scan_folder", { root: folder })); }
+    try { setResult(await invoke<ScanSummary>("scan_folder", { root: folder })); setPage("library"); }
     catch (e) { setError(String(e)); }
     finally { setBusy(false); }
   }
@@ -138,7 +139,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     try {
       unlisten = await listen<ScanProgress>("photovault:scan-progress", event => setProgress(event.payload));
-      setDuplicates(await invoke<DuplicateReport>("find_exact_duplicates", { root: folder }));
+      setDuplicates(await invoke<DuplicateReport>("find_exact_duplicates", { root: folder })); setPage("duplicates");
     } catch (e) { setError(String(e)); }
     finally { unlisten?.(); setBusy(false); setProgress(null); setCancelling(false); }
   }
@@ -148,7 +149,7 @@ export default function App() {
     let unlisten: (() => void) | undefined;
     try {
       unlisten = await listen<ScanProgress>("photovault:scan-progress", event => setProgress(event.payload));
-      setSimilar(await invoke<SimilarityReport>("find_similar_photos", { root: folder }));
+      setSimilar(await invoke<SimilarityReport>("find_similar_photos", { root: folder })); setPage("similar");
     } catch (e) { setError(String(e)); }
     finally { unlisten?.(); setBusy(false); setProgress(null); setCancelling(false); }
   }
@@ -160,20 +161,43 @@ export default function App() {
   }
   const extensions = Object.entries(result?.by_extension ?? {}).sort((a,b) => b[1]-a[1]);
   return <div className="shell">
-    <aside className="sidebar"><div className="brand"><Images size={26}/><span>PhotoVault</span></div><div className="nav active"><ScanSearch size={18}/> Explorar biblioteca</div><div className="nav"><ShieldCheck size={18}/> Duplicados exactos</div><div className="foot">v0.1.0 · Solo lectura</div></aside>
-    <main><div className="eyebrow">BIBLIOTECA LOCAL</div><h1>Tu colección, bajo control.</h1><p className="intro">Explora tus fotografías sin mover, modificar ni eliminar ningún archivo.</p>
-      <section className="panel"><h2>Seleccionar carpeta</h2><p>Elige una carpeta de Windows para analizar archivos multimedia.</p>
-        <div className="actions"><button className="secondary" onClick={chooseFolder} disabled={busy}><FolderOpen size={18}/> Examinar</button><div className="path" title={folder}>{folder || "Ninguna carpeta seleccionada"}</div><button disabled={!folder || busy} onClick={scan}>{busy ? "Analizando…" : "Inventariar"}</button><button disabled={!folder || busy} onClick={checkDuplicates}><ShieldCheck size={17}/> Buscar duplicados</button><button disabled={!folder || busy} onClick={checkSimilar}><Images size={17}/> Buscar similares (experimental)</button>{busy && progress && <button className="secondary" onClick={cancelScan} disabled={cancelling}>{cancelling ? "Cancelando…" : "Cancelar análisis"}</button>}</div>
+    <aside className="sidebar">
+      <div className="brand"><Images size={26}/><span>PhotoVault</span></div>
+      <button className={page === "library" ? "nav active" : "nav"} onClick={() => setPage("library")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "library" ? undefined : "transparent" }}><ScanSearch size={18}/> Biblioteca</button>
+      <button className={page === "duplicates" ? "nav active" : "nav"} onClick={() => setPage("duplicates")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "duplicates" ? undefined : "transparent" }}><ShieldCheck size={18}/> Duplicados exactos</button>
+      <button className={page === "similar" ? "nav active" : "nav"} onClick={() => setPage("similar")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "similar" ? undefined : "transparent" }}><Images size={18}/> Similitud visual</button>
+      <div className="foot">v0.1.0 · Solo lectura</div>
+    </aside>
+    <main>
+      <div className="eyebrow">{page === "library" ? "BIBLIOTECA LOCAL" : page === "duplicates" ? "DUPLICADOS EXACTOS" : "SIMILITUD VISUAL"}</div>
+      <h1>{page === "library" ? "Tu colección, bajo control." : page === "duplicates" ? "Archivos idénticos." : "Fotografías similares."}</h1>
+      <p className="intro">{page === "library" ? "Selecciona una biblioteca y explora su contenido." : page === "duplicates" ? "Identifica copias verificadas byte a byte." : "Revisa coincidencias perceptuales antes de tomar decisiones."}</p>
+      <section className="panel">
+        <h2>{page === "library" ? "Seleccionar carpeta" : "Biblioteca seleccionada"}</h2>
+        <div className="actions" style={{ flexWrap: "wrap" }}>
+          <button className="secondary" onClick={chooseFolder} disabled={busy}><FolderOpen size={18}/> {folder ? "Cambiar carpeta" : "Examinar"}</button>
+          <div className="path" title={folder} style={{ overflowWrap: "anywhere", minWidth: 0 }}>{folder || "Ninguna carpeta seleccionada"}</div>
+          {page === "library" && <button disabled={!folder || busy} onClick={scan}>{busy ? "Analizando…" : "Inventariar"}</button>}
+          {page === "duplicates" && <button disabled={!folder || busy} onClick={checkDuplicates}><ShieldCheck size={17}/> {duplicates ? "Volver a analizar" : "Buscar duplicados"}</button>}
+          {page === "similar" && <button disabled={!folder || busy} onClick={checkSimilar}><Images size={17}/> {similar ? "Volver a analizar" : "Buscar similares"}</button>}
+          {busy && progress && <button className="secondary" onClick={cancelScan} disabled={cancelling}>{cancelling ? "Cancelando…" : "Cancelar análisis"}</button>}
+        </div>
       </section>
+      {page === "library" && folder && <section className="panel"><h2>¿Qué quieres hacer?</h2><div className="actions" style={{ flexWrap: "wrap" }}>
+        <button onClick={() => setPage("duplicates")}><ShieldCheck size={17}/> Buscar duplicados exactos</button>
+        <button onClick={() => setPage("similar")}><Images size={17}/> Buscar fotografías similares</button>
+      </div></section>}
       {progress && <section className="panel" role="status"><h2>Progreso del análisis</h2><p>Etapa: {progress.phase} · {fmt(progress.processed)} / {progress.total ? fmt(progress.total) : "calculando"} archivos candidatos</p>{progress.total > 0 && <progress max={progress.total} value={progress.processed} style={{width:"100%"}} />}</section>}
       {error && <div className="error"><AlertTriangle size={18}/>{error}</div>}
-      {result && <><div className="stats"><div className="stat"><span>Archivos multimedia</span><strong>{fmt(result.files)}</strong></div><div className="stat"><span>Espacio total</span><strong>{gb(result.bytes)}</strong></div><div className="stat"><span>Errores de acceso</span><strong>{result.errors}</strong></div></div>
+      {page === "library" && result && <><div className="stats"><div className="stat"><span>Archivos multimedia</span><strong>{fmt(result.files)}</strong></div><div className="stat"><span>Espacio total</span><strong>{gb(result.bytes)}</strong></div><div className="stat"><span>Errores de acceso</span><strong>{result.errors}</strong></div></div>
         <section className="panel"><h2>Formatos encontrados</h2><div className="formats">{extensions.map(([ext,count]) => <div key={ext} className="format"><span>{ext.toUpperCase()}</span><strong>{fmt(count)}</strong></div>)}</div></section></>}
-      {duplicates && <><div className="stats"><div className="stat"><span>Grupos exactos</span><strong>{fmt(duplicates.groups.length)}</strong></div><div className="stat"><span>Espacio redundante estimado</span><strong>{gb(duplicates.redundant_bytes)}</strong></div><div className="stat"><span>Hashes reutilizados</span><strong>{fmt(duplicates.cache_hits)}</strong></div></div>
+      {page === "duplicates" && !duplicates && !busy && <section className="panel"><p>Ejecuta el análisis para encontrar archivos idénticos en la carpeta seleccionada.</p></section>}
+      {page === "duplicates" && duplicates && <><div className="stats"><div className="stat"><span>Grupos exactos</span><strong>{fmt(duplicates.groups.length)}</strong></div><div className="stat"><span>Espacio redundante estimado</span><strong>{gb(duplicates.redundant_bytes)}</strong></div><div className="stat"><span>Hashes reutilizados</span><strong>{fmt(duplicates.cache_hits)}</strong></div></div>
         <section className="panel"><h2>Archivos idénticos por bytes</h2><p>Hashes calculados: {fmt(duplicates.hashes_computed)} · Caché SQLite: {duplicates.cache_available ? "disponible" : "no disponible"} · Errores: {fmt(duplicates.errors)}</p><p>Coincidencias verificadas al analizar. Ningún archivo será eliminado; los resultados pueden quedar obsoletos si cambia la biblioteca.</p>
         {duplicates.groups.length === 0 && <p>No se encontraron duplicados exactos.</p>}
         {duplicates.groups.map((group, i) => <div className="duplicate-group" key={i}><strong>Grupo {i+1} · {fmt(group.paths.length)} copias · {gb(group.size_bytes)} por archivo</strong>{group.paths.map(path => <div className="duplicate-path" key={path} title={path}>{path}</div>)}</div>)}</section></>}
-      {similar && <section className="panel"><h2>Fotografías visualmente similares · Experimental</h2>
+      {page === "similar" && !similar && !busy && <section className="panel"><p>Ejecuta el análisis para descubrir fotografías visualmente similares.</p></section>}
+      {page === "similar" && similar && <section className="panel"><h2>Fotografías visualmente similares · Experimental</h2>
         <p>Analizadas: {fmt(similar.analyzed)} · Omitidas por límite de 3,000: {fmt(similar.skipped)} · Errores: {fmt(similar.errors)} · Umbral pHash: {similar.threshold}/64</p>
         <p>Coincidencias probables, no duplicados confirmados. La agrupación exige que cada fotografía coincida con todas las demás del mismo grupo; no elimina archivos.</p>
         <div className="actions" style={{ marginBottom: 16 }}>
