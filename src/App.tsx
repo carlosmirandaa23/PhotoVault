@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -11,6 +11,45 @@ type DuplicateGroup = { size_bytes: number; paths: string[] };
 type DuplicateReport = { scanned_files: number; errors: number; groups: DuplicateGroup[]; redundant_bytes: number; cache_hits: number; hashes_computed: number; cache_available: boolean };
 const fmt = (n: number) => n.toLocaleString("es-MX");
 const gb = (n: number) => (n / 1073741824).toFixed(2) + " GB";
+
+type VisualGroup = { paths: string[]; maxDistance: number };
+
+// Conservative complete-link grouping: every member must have a reported
+// qualifying similarity to every other member. Never infer A~C from A~B~C.
+function buildVisualGroups(pairs: SimilarityReport["pairs"]): VisualGroup[] {
+  const adjacency = new Map<string, Map<string, number>>();
+  for (const { first, second, distance } of pairs) {
+    if (first === second) continue;
+    if (!adjacency.has(first)) adjacency.set(first, new Map());
+    if (!adjacency.has(second)) adjacency.set(second, new Map());
+    adjacency.get(first)!.set(second, distance);
+    adjacency.get(second)!.set(first, distance);
+  }
+  const paths = [...adjacency.keys()].sort((a,b) =>
+    (adjacency.get(b)!.size - adjacency.get(a)!.size) || a.localeCompare(b));
+  const assigned = new Set<string>();
+  const groups: VisualGroup[] = [];
+  for (const anchor of paths) {
+    if (assigned.has(anchor)) continue;
+    const members = [anchor];
+    let maxDistance = 0;
+    const candidates = [...adjacency.get(anchor)!.entries()]
+      .filter(([path]) => !assigned.has(path))
+      .sort((a,b) => a[1] - b[1] || a[0].localeCompare(b[0]));
+    for (const [candidate] of candidates) {
+      const distances = members.map(member => adjacency.get(member)?.get(candidate));
+      if (distances.every((d): d is number => d !== undefined)) {
+        members.push(candidate);
+        maxDistance = Math.max(maxDistance, ...distances);
+      }
+    }
+    if (members.length >= 2) {
+      members.forEach(path => assigned.add(path));
+      groups.push({ paths: members, maxDistance });
+    }
+  }
+  return groups.sort((a,b) => b.paths.length - a.paths.length || a.paths[0].localeCompare(b.paths[0]));
+}
 
 // Reuse thumbnails for repeated files and bound decoding work.
 // The cache is scoped to one similarity scan and holds at most 120 entries.
@@ -72,6 +111,9 @@ export default function App() {
   const [duplicates, setDuplicates] = useState<DuplicateReport | null>(null);
   const [similar, setSimilar] = useState<SimilarityReport | null>(null);
   const [visiblePairs, setVisiblePairs] = useState(20);
+  const [visibleGroups, setVisibleGroups] = useState(10);
+  const [similarityView, setSimilarityView] = useState<"groups" | "pairs">("groups");
+  const visualGroups = useMemo(() => buildVisualGroups(similar?.pairs ?? []), [similar]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState<ScanProgress | null>(null);
@@ -102,7 +144,7 @@ export default function App() {
   }
   async function checkSimilar() {
     if (!folder || busy) return;
-    setBusy(true); setError(""); setSimilar(null); previewCache.clear(); setVisiblePairs(20); setProgress({ phase: "preparando", processed: 0, total: 0 }); setCancelling(false);
+    setBusy(true); setError(""); setSimilar(null); previewCache.clear(); setVisiblePairs(20); setVisibleGroups(10); setSimilarityView("groups"); setProgress({ phase: "preparando", processed: 0, total: 0 }); setCancelling(false);
     let unlisten: (() => void) | undefined;
     try {
       unlisten = await listen<ScanProgress>("photovault:scan-progress", event => setProgress(event.payload));
@@ -133,16 +175,34 @@ export default function App() {
         {duplicates.groups.map((group, i) => <div className="duplicate-group" key={i}><strong>Grupo {i+1} · {fmt(group.paths.length)} copias · {gb(group.size_bytes)} por archivo</strong>{group.paths.map(path => <div className="duplicate-path" key={path} title={path}>{path}</div>)}</div>)}</section></>}
       {similar && <section className="panel"><h2>Fotografías visualmente similares · Experimental</h2>
         <p>Analizadas: {fmt(similar.analyzed)} · Omitidas por límite de 3,000: {fmt(similar.skipped)} · Errores: {fmt(similar.errors)} · Umbral pHash: {similar.threshold}/64</p>
-        <p>Coincidencias probables, no duplicados confirmados. Distancia menor indica mayor parecido; revisa cada pareja antes de actuar.</p>
-        {similar.pairs.length === 0 && <p>No se encontraron coincidencias dentro del umbral.</p>}
-        {similar.pairs.slice(0, visiblePairs).map((pair,i) => <div className="duplicate-group" key={i}>
-          <strong>Pareja {i+1} · Distancia {pair.distance}/64</strong>
-          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
-            <PhotoPreview root={folder} path={pair.first} />
-            <PhotoPreview root={folder} path={pair.second} />
-          </div>
-        </div>)}
-        {similar.pairs.length > visiblePairs && <button className="secondary" onClick={() => setVisiblePairs(n => n + 20)}>Mostrar 20 parejas más ({fmt(similar.pairs.length - visiblePairs)} pendientes)</button>}
+        <p>Coincidencias probables, no duplicados confirmados. La agrupación exige que cada fotografía coincida con todas las demás del mismo grupo; no elimina archivos.</p>
+        <div className="actions" style={{ marginBottom: 16 }}>
+          <button className={similarityView === "groups" ? "" : "secondary"} onClick={() => setSimilarityView("groups")}>Galería de grupos ({fmt(visualGroups.length)})</button>
+          <button className={similarityView === "pairs" ? "" : "secondary"} onClick={() => setSimilarityView("pairs")}>Ver parejas ({fmt(similar.pairs.length)})</button>
+        </div>
+        {similarityView === "groups" ? <>
+          {visualGroups.length === 0 && <p>No se encontraron grupos visuales con al menos dos fotografías.</p>}
+          {visualGroups.slice(0, visibleGroups).map((group,i) => <div className="duplicate-group" key={group.paths[0]}>
+            <strong>Grupo {i+1} · {fmt(group.paths.length)} fotografías · Distancia máxima interna {group.maxDistance}/64</strong>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 14, marginTop: 12 }}>
+              {group.paths.map((path,j) => <div key={path} style={{ minWidth: 0 }}>
+                {j === 0 && <div style={{ marginBottom: 6, fontSize: 12, opacity: .8 }}>Referencia del grupo</div>}
+                <PhotoPreview root={folder} path={path} />
+              </div>)}
+            </div>
+          </div>)}
+          {visualGroups.length > visibleGroups && <button className="secondary" onClick={() => setVisibleGroups(n => n + 10)}>Mostrar 10 grupos más ({fmt(visualGroups.length - visibleGroups)} pendientes)</button>}
+        </> : <>
+          {similar.pairs.length === 0 && <p>No se encontraron coincidencias dentro del umbral.</p>}
+          {similar.pairs.slice(0, visiblePairs).map((pair,i) => <div className="duplicate-group" key={i}>
+            <strong>Pareja {i+1} · Distancia {pair.distance}/64</strong>
+            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
+              <PhotoPreview root={folder} path={pair.first} />
+              <PhotoPreview root={folder} path={pair.second} />
+            </div>
+          </div>)}
+          {similar.pairs.length > visiblePairs && <button className="secondary" onClick={() => setVisiblePairs(n => n + 20)}>Mostrar 20 parejas más ({fmt(similar.pairs.length - visiblePairs)} pendientes)</button>}
+        </>}
       </section>}
       <div className="notice"><ShieldCheck size={20}/><span>Modo seguro: inventario y comparación de bytes de solo lectura. No se eliminan archivos. La similitud visual es experimental y no implica igualdad de archivos.</span></div>
     </main></div>;
