@@ -5,6 +5,7 @@ use std::io::Cursor;
 use std::{collections::BTreeMap, fs, path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}};
 use tauri::{Emitter, State};
 
+mod decisions;
 mod duplicates;
 mod hash_cache;
 mod hybrid_policy;
@@ -109,6 +110,18 @@ async fn find_similar_photos(
 }
 
 #[tauri::command]
+async fn save_photo_decision(root: String, path: String, decision: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || decisions::save(&PathBuf::from(root), &PathBuf::from(path), &decision))
+        .await.map_err(|e| format!("No se pudo guardar la decisión: {e}"))?
+}
+
+#[tauri::command]
+async fn get_photo_decision(root: String, path: String) -> Result<Option<decisions::Decision>, String> {
+    tauri::async_runtime::spawn_blocking(move || decisions::get(&PathBuf::from(root), &PathBuf::from(path)))
+        .await.map_err(|e| format!("No se pudo consultar la decisión: {e}"))?
+}
+
+#[tauri::command]
 async fn preview_organization(root: String) -> Result<organizer::OrganizationPlan, String> {
     tauri::async_runtime::spawn_blocking(move || organizer::plan(&PathBuf::from(root)))
         .await.map_err(|e| format!("Error en la planificación: {e}"))?
@@ -147,7 +160,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ScanState::default())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates, find_similar_photos, preview_organization, preview_photo, cancel_duplicate_scan])
+        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates, find_similar_photos, preview_organization, save_photo_decision, get_photo_decision, preview_photo, cancel_duplicate_scan])
         .run(tauri::generate_context!())
         .expect("No se pudo iniciar PhotoVault");
 }
