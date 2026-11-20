@@ -1,6 +1,7 @@
 //! Read-only perceptual similarity scan. Results are suggestions, never deletion instructions.
 use image::{imageops::FilterType, ImageReader};
 use serde::Serialize;
+use rayon::prelude::*;
 use std::{fs, path::{Path, PathBuf}, sync::atomic::{AtomicBool, Ordering}};
 
 const EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp", "bmp", "gif", "tif", "tiff"];
@@ -75,16 +76,28 @@ pub fn scan(root: &Path, cancel: &AtomicBool, mut progress: impl FnMut(u64,u64))
     let skipped = paths.len().saturating_sub(MAX_FILES);
     paths.truncate(MAX_FILES);
     let total = paths.len() as u64;
+    // Process images in bounded parallel batches; emit progress on the calling thread.
+    // Preserve deterministic path order and check cancellation between batches.
     let mut fingerprints: Vec<(PathBuf,u64)> = Vec::new();
+    let mut processed = 0u64;
     progress(0,total);
-    for (i,path) in paths.into_iter().enumerate() {
+    for batch in paths.chunks(32) {
         if cancel.load(Ordering::Relaxed) { return Err("Análisis cancelado".into()); }
-        match phash(&path) {
-            Ok(hash) => fingerprints.push((path,hash)),
-            Err(_) => errors += 1,
+        let outcomes: Vec<_> = batch.par_iter().map(|path| {
+            if cancel.load(Ordering::Relaxed) { return None; }
+            Some((path.clone(), phash(path)))
+        }).collect();
+        for outcome in outcomes {
+            match outcome {
+                Some((path, Ok(hash))) => fingerprints.push((path,hash)),
+                Some((_, Err(_))) => errors += 1,
+                None => {}
+            }
         }
-        progress(i as u64+1,total);
+        processed += batch.len() as u64;
+        progress(processed,total);
     }
+    if cancel.load(Ordering::Relaxed) { return Err("Análisis cancelado".into()); }
     let mut pairs = Vec::new();
     for i in 0..fingerprints.len() {
         if cancel.load(Ordering::Relaxed) { return Err("Análisis cancelado".into()); }
