@@ -311,6 +311,30 @@ mod tests {
         let recall = if tp+fn_==0 {1.0} else {tp as f64/(tp+fn_) as f64};
         println!("Orientado: TP={tp}, FP={fp}, FN={fn_}, TN={tn}, precisión={:.2}%, recall={:.2}%, cálculo={:?}",
             precision*100.0,recall*100.0,started.elapsed());
+        // Optional read-only pair export for comparing Rust pHash with Python ORB.
+        // This uses the exact production acceptance rule, not a Python approximation.
+        if let Ok(csv_path) = std::env::var("PHOTOVAULT_PHASH_CSV") {
+            use std::io::Write;
+            let output = PathBuf::from(csv_path);
+            if let Some(parent) = output.parent() {
+                fs::create_dir_all(parent).expect("No se pudo crear la carpeta del CSV");
+            }
+            let mut file = fs::File::create(&output).expect("No se pudo crear el CSV pHash");
+            writeln!(file, "first,second,same_family,predicted,standard_distance,oriented_distance").unwrap();
+            for i in 0..images.len() {
+                for j in i+1..images.len() {
+                    let standard = (oriented[i][0] ^ oriented[j][0]).count_ones();
+                    let oriented_distance = orientation_distance(&oriented[i], &oriented[j]);
+                    let predicted = standard <= THRESHOLD || oriented_distance <= 4;
+                    writeln!(file, "{},{},{},{},{},{}",
+                        images[i].2.file_name().unwrap().to_string_lossy(),
+                        images[j].2.file_name().unwrap().to_string_lossy(),
+                        u8::from(images[i].0 == images[j].0),
+                        u8::from(predicted), standard, oriented_distance).unwrap();
+                }
+            }
+            println!("CSV pHash exportado: {}", output.display());
+        }
         println!("Ejemplos de falsos positivos del detector orientado:");
         for example in examples { println!("  {example}"); }
         println!("Distancia al ORIGINAL por variante:");
