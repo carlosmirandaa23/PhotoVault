@@ -7,6 +7,7 @@ use tauri::{Emitter, State};
 
 mod duplicates;
 mod hash_cache;
+mod hybrid_policy;
 mod similarity;
 
 #[derive(Default)]
