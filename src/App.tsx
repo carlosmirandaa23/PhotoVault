@@ -6,6 +6,8 @@ import { FolderOpen, Images, ScanSearch, ShieldCheck, AlertTriangle, ArrowRight,
 
 type ScanSummary = { root: string; files: number; bytes: number; errors: number; by_extension: Record<string, number> };
 type SimilarityReport = { analyzed: number; skipped: number; errors: number; threshold: number; pairs: { first: string; second: string; distance: number }[] };
+type PlannedFile = { path: string; category: "photo" | "snapshot" | "possible_trash" | "undated" | "video"; suggested_folder: string; reason: string; date_source: string; width: number | null; height: number | null };
+type OrganizationPlan = { analyzed: number; skipped: number; errors: number; files: PlannedFile[]; read_only: boolean };
 type ScanProgress = { phase: string; processed: number; total: number };
 type DuplicateGroup = { size_bytes: number; paths: string[] };
 type DuplicateReport = { scanned_files: number; errors: number; groups: DuplicateGroup[]; redundant_bytes: number; cache_hits: number; hashes_computed: number; cache_available: boolean };
@@ -107,11 +109,13 @@ function PhotoPreview({ root, path }: { root: string; path: string }) {
 }
 
 export default function App() {
-  const [page, setPage] = useState<"library" | "duplicates" | "similar">("library");
+  const [page, setPage] = useState<"library" | "duplicates" | "similar" | "organize">("library");
   const [folder, setFolder] = useState("");
   const [result, setResult] = useState<ScanSummary | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateReport | null>(null);
   const [similar, setSimilar] = useState<SimilarityReport | null>(null);
+  const [organization, setOrganization] = useState<OrganizationPlan | null>(null);
+  const [organizeFilter, setOrganizeFilter] = useState<"all" | PlannedFile["category"]>("all");
   const [visiblePairs, setVisiblePairs] = useState(20);
   const [visibleGroups, setVisibleGroups] = useState(10);
   const [similarityView, setSimilarityView] = useState<"groups" | "pairs">("groups");
@@ -124,7 +128,7 @@ export default function App() {
     setError("");
     try {
       const selected = await open({ directory: true, multiple: false, title: "Selecciona tu biblioteca de fotos" });
-      if (typeof selected === "string") { setFolder(selected); setResult(null); setDuplicates(null); setSimilar(null); setPage("library"); }
+      if (typeof selected === "string") { setFolder(selected); setResult(null); setDuplicates(null); setSimilar(null); setOrganization(null); setPage("library"); }
     } catch (e) { setError(String(e)); }
   }
   async function scan() {
@@ -154,12 +158,24 @@ export default function App() {
     } catch (e) { setError(String(e)); }
     finally { unlisten?.(); setBusy(false); setProgress(null); setCancelling(false); }
   }
+  async function previewOrganization() {
+    if (!folder || busy) return;
+    setBusy(true); setError(""); setOrganization(null);
+    try { setOrganization(await invoke<OrganizationPlan>("preview_organization", { root: folder })); setPage("organize"); }
+    catch (e) { setError(String(e)); }
+    finally { setBusy(false); }
+  }
   async function cancelScan() {
     if (!busy || !progress || cancelling) return;
     setCancelling(true);
     try { await invoke("cancel_duplicate_scan"); }
     catch (e) { setError(String(e)); setCancelling(false); }
   }
+  const organizationCategories: { key: PlannedFile["category"]; title: string }[] = [
+    {key:"photo",title:"Fotografías"}, {key:"video",title:"Videos"},
+    {key:"snapshot",title:"Capturas / mensajería"}, {key:"possible_trash",title:"Posible basura"},
+    {key:"undated",title:"Sin fecha / revisión"}
+  ];
   const extensions = Object.entries(result?.by_extension ?? {}).sort((a,b) => b[1]-a[1]);
   return <div className="shell">
     <aside className="sidebar">
@@ -167,12 +183,13 @@ export default function App() {
       <button className={page === "library" ? "nav active" : "nav"} onClick={() => setPage("library")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "library" ? undefined : "transparent" }}><ScanSearch size={18}/> Biblioteca</button>
       <button className={page === "duplicates" ? "nav active" : "nav"} onClick={() => setPage("duplicates")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "duplicates" ? undefined : "transparent" }}><ShieldCheck size={18}/> Duplicados exactos</button>
       <button className={page === "similar" ? "nav active" : "nav"} onClick={() => setPage("similar")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "similar" ? undefined : "transparent" }}><Images size={18}/> Similitud visual</button>
+      <button className={page === "organize" ? "nav active" : "nav"} onClick={() => setPage("organize")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "organize" ? undefined : "transparent" }}><FolderOpen size={18}/> Organizar fotografías</button>
       <div className="sidebar-status"><ShieldCheck size={17}/><div><strong>Tu biblioteca está protegida</strong><span>Sin cambios en tus archivos</span></div></div><div className="foot">PhotoVault v0.1.0 · Vista previa</div>
     </aside>
     <main>
-      <div className="topline"><div className="eyebrow">{page === "library" ? "BIBLIOTECA LOCAL" : page === "duplicates" ? "DUPLICADOS EXACTOS" : "SIMILITUD VISUAL"}</div><span className="readonly-pill"><ShieldCheck size={14}/> Modo seguro · Solo lectura</span></div>
-      <h1>{page === "library" ? "Tu colección, bajo control." : page === "duplicates" ? "Duplicados confirmados." : "Posibles fotografías relacionadas."}</h1>
-      <p className="intro">{page === "library" ? "Selecciona una biblioteca y explora su contenido." : page === "duplicates" ? "Archivos con el mismo contenido, verificados mediante hash criptográfico. No se borrará nada." : "Sugerencias basadas en características visuales; pueden existir coincidencias incorrectas. Tú decides qué conservar."}</p>
+      <div className="topline"><div className="eyebrow">{page === "library" ? "BIBLIOTECA LOCAL" : page === "duplicates" ? "DUPLICADOS EXACTOS" : page === "organize" ? "PLAN DE ORGANIZACIÓN" : "SIMILITUD VISUAL"}</div><span className="readonly-pill"><ShieldCheck size={14}/> Modo seguro · Solo lectura</span></div>
+      <h1>{page === "library" ? "Tu colección, bajo control." : page === "duplicates" ? "Duplicados confirmados." : page === "organize" ? "Organiza sin arriesgar tus recuerdos." : "Posibles fotografías relacionadas."}</h1>
+      <p className="intro">{page === "library" ? "Selecciona una biblioteca y explora su contenido." : page === "duplicates" ? "Archivos con el mismo contenido, verificados mediante hash criptográfico. No se borrará nada." : page === "organize" ? "Vista previa de carpetas sugeridas, capturas y posible basura. Sin mover, renombrar ni borrar archivos." : "Sugerencias basadas en características visuales; pueden existir coincidencias incorrectas. Tú decides qué conservar."}</p>
       <section className="panel library-selector">
         <div className="section-heading"><span className="section-icon"><FolderOpen size={20}/></span><div><h2>{page === "library" ? "Tu carpeta de fotografías" : "Biblioteca seleccionada"}</h2><p>{folder ? "Origen de los archivos que analizaremos" : "Elige una carpeta para comenzar. No modificaremos su contenido."}</p></div></div>
         <div className="actions" style={{ flexWrap: "wrap" }}>
@@ -180,15 +197,33 @@ export default function App() {
           <div className="path" title={folder} style={{ overflowWrap: "anywhere", minWidth: 0 }}>{folder || "Ninguna carpeta seleccionada"}</div>
           {page === "library" && <button disabled={!folder || busy} onClick={scan}>{busy ? "Analizando…" : "Inventariar"}</button>}
           {page === "duplicates" && <button disabled={!folder || busy} onClick={checkDuplicates}><ShieldCheck size={17}/> {duplicates ? "Volver a analizar" : "Buscar duplicados"}</button>}
+          {page === "organize" && <button disabled={!folder || busy} onClick={previewOrganization}><FolderOpen size={17}/> {organization ? "Actualizar propuesta" : "Preparar propuesta"}</button>}
           {page === "similar" && <button disabled={!folder || busy} onClick={checkSimilar}><Images size={17}/> {similar ? "Volver a analizar" : "Buscar similares"}</button>}
           {busy && progress && <button className="secondary" onClick={cancelScan} disabled={cancelling}>{cancelling ? "Cancelando…" : "Cancelar análisis"}</button>}
         </div>
       </section>
-      {page === "library" && folder && <section className="workflows"><div className="section-heading"><div><h2>¿Qué te gustaría revisar?</h2><p>Elige una herramienta para explorar tu colección.</p></div></div><div className="workflow-grid"><button className="workflow-card" onClick={() => setPage("duplicates")}><span className="workflow-icon"><Layers3 size={23}/></span><strong>Duplicados confirmados</strong><span>Archivos idénticos verificados mediante hash criptográfico. Descubre cuánto espacio ocupan las copias.</span><span className="workflow-link">Explorar copias <ArrowRight size={16}/></span></button><button className="workflow-card" onClick={() => setPage("similar")}><span className="workflow-icon violet"><Sparkles size={23}/></span><strong>Posibles fotografías relacionadas</strong><span>Explora sugerencias visuales de versiones editadas o tomas parecidas. Ninguna coincidencia se considera confirmada.</span><span className="workflow-link">Explorar similitudes <ArrowRight size={16}/></span></button></div></section>}
+      {page === "library" && folder && <section className="workflows"><div className="section-heading"><div><h2>¿Qué te gustaría revisar?</h2><p>Elige una herramienta para explorar tu colección.</p></div></div><div className="workflow-grid"><button className="workflow-card" onClick={() => setPage("duplicates")}><span className="workflow-icon"><Layers3 size={23}/></span><strong>Duplicados confirmados</strong><span>Archivos idénticos verificados mediante hash criptográfico. Descubre cuánto espacio ocupan las copias.</span><span className="workflow-link">Explorar copias <ArrowRight size={16}/></span></button><button className="workflow-card" onClick={() => setPage("similar")}><span className="workflow-icon violet"><Sparkles size={23}/></span><strong>Posibles fotografías relacionadas</strong><span>Explora sugerencias visuales de versiones editadas o tomas parecidas. Ninguna coincidencia se considera confirmada.</span><span className="workflow-link">Explorar similitudes <ArrowRight size={16}/></span></button><button className="workflow-card" onClick={() => setPage("organize")}><span className="workflow-icon"><FolderOpen size={23}/></span><strong>Plan de organización</strong><span>Clasifica fotos, videos, capturas y posibles archivos prescindibles. Solo propone carpetas, sin modificar nada.</span><span className="workflow-link">Ver propuesta <ArrowRight size={16}/></span></button></div></section>}
       {progress && <section className="panel progress-panel" role="status" aria-live="polite"><div className="progress-header"><div><h2>Análisis en curso</h2><p>Etapa: {progress.phase} · {fmt(progress.processed)} de {progress.total ? fmt(progress.total) : "total por calcular"} archivos</p></div><Clock3 size={22}/></div>{progress.total > 0 && <><progress max={progress.total} value={progress.processed} /><span className="progress-caption">{Math.min(100,Math.round(progress.processed/progress.total*100))}% completado</span></>}</section>}
       {error && <div className="error"><AlertTriangle size={18}/>{error}</div>}
       {page === "library" && result && <><div className="stats"><div className="stat"><span>Archivos multimedia</span><strong>{fmt(result.files)}</strong></div><div className="stat"><span>Espacio total</span><strong>{gb(result.bytes)}</strong></div><div className="stat"><span>Errores de acceso</span><strong>{result.errors}</strong></div></div>
         <section className="panel"><h2>Formatos encontrados</h2><div className="formats">{extensions.map(([ext,count]) => <div key={ext} className="format"><span>{ext.toUpperCase()}</span><strong>{fmt(count)}</strong></div>)}</div></section></>}
+      {page === "organize" && !organization && !busy && <section className="panel"><p>Prepara una propuesta sin cambios sobre tus archivos. La detección de basura es solo una advertencia, no una orden de borrado.</p></section>}
+      {page === "organize" && organization && <section className="panel">
+        <h2>Propuesta de organización · Solo lectura</h2>
+        <p>Archivos analizados: {fmt(organization.analyzed)} · Omitidos por límite: {fmt(organization.skipped)} · Errores: {fmt(organization.errors)}</p>
+        <p>La fecha se extrae del nombre cuando existe. Esta versión todavía no verifica EXIF ni agrupa eventos; las carpetas son sugerencias provisionales. Ningún archivo se mueve, renombra ni elimina.</p>
+        <div className="actions" style={{ flexWrap: "wrap" }}>
+          <button className={organizeFilter === "all" ? "" : "secondary"} onClick={() => setOrganizeFilter("all")}>Todos ({fmt(organization.files.length)})</button>
+          {organizationCategories.map(({key,title}) => <button key={key} className={organizeFilter === key ? "" : "secondary"} onClick={() => setOrganizeFilter(key)}>{title} ({fmt(organization.files.filter(f => f.category === key).length)})</button>)}
+        </div>
+        {organization.files.filter(f => organizeFilter === "all" || f.category === organizeFilter).slice(0,100).map(f => <div className="duplicate-group" key={f.path}>
+          <strong style={{overflowWrap:"anywhere"}}>{f.path.split(/[\\/]/).pop()}</strong>
+          <p>{f.reason}</p>
+          <p>Destino sugerido: <strong>{f.suggested_folder}</strong> · Fecha: {f.date_source}{f.width && f.height ? ` · ${f.width} × ${f.height}` : ""}</p>
+          <small style={{overflowWrap:"anywhere"}}>{f.path}</small>
+        </div>)}
+        <p>Se muestran como máximo 100 archivos del filtro seleccionado. Los demás permanecen incluidos en el resumen.</p>
+      </section>}
       {page === "duplicates" && !duplicates && !busy && <section className="panel"><p>Ejecuta el análisis para encontrar archivos idénticos en la carpeta seleccionada.</p></section>}
       {page === "duplicates" && duplicates && <><div className="stats"><div className="stat"><span>Grupos exactos</span><strong>{fmt(duplicates.groups.length)}</strong></div><div className="stat"><span>Espacio redundante estimado</span><strong>{humanSize(duplicates.redundant_bytes)}</strong></div><div className="stat"><span>Hashes reutilizados</span><strong>{fmt(duplicates.cache_hits)}</strong></div></div>
         <section className="panel"><h2>Duplicados confirmados · mismo contenido</h2><p>Hashes calculados: {fmt(duplicates.hashes_computed)} · Caché SQLite: {duplicates.cache_available ? "disponible" : "no disponible"} · Errores: {fmt(duplicates.errors)}</p><p>Confirmación de contenido idéntico mediante hash criptográfico al momento del análisis. El nombre, la ubicación y los metadatos del sistema de archivos pueden diferir. Ningún archivo será eliminado; los resultados pueden quedar obsoletos si cambia la biblioteca.</p>
