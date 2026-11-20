@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { DuplicateCleanup } from "./DuplicateCleanup";
 import { FolderOpen, Images, ScanSearch, ShieldCheck, AlertTriangle, ArrowRight, CheckCircle2, Clock3, Layers3, Sparkles } from "lucide-react";
 
 type ScanSummary = { root: string; files: number; bytes: number; errors: number; by_extension: Record<string, number> };
@@ -216,6 +217,14 @@ export default function App() {
     {key:"snapshot",title:"Capturas / mensajería"}, {key:"possible_trash",title:"Posible basura"},
     {key:"undated",title:"Sin fecha / revisión"}
   ];
+  function removeCleaned(removed: string[]) {
+    const gone = new Set(removed);
+    setDuplicates(report => {
+      if (!report) return report;
+      const groups = report.groups.map(g => ({ ...g, paths: g.paths.filter(p => !gone.has(p)) })).filter(g => g.paths.length > 1);
+      return { ...report, groups, redundant_bytes: groups.reduce((n, g) => n + g.size_bytes * (g.paths.length - 1), 0) };
+    });
+  }
   const extensions = Object.entries(result?.by_extension ?? {}).sort((a,b) => b[1]-a[1]);
   return <div className="shell">
     <aside className="sidebar">
@@ -224,12 +233,12 @@ export default function App() {
       <button className={page === "duplicates" ? "nav active" : "nav"} onClick={() => setPage("duplicates")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "duplicates" ? undefined : "transparent" }}><ShieldCheck size={18}/> Duplicados exactos</button>
       <button className={page === "similar" ? "nav active" : "nav"} onClick={() => setPage("similar")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "similar" ? undefined : "transparent" }}><Images size={18}/> Similitud visual</button>
       <button className={page === "organize" ? "nav active" : "nav"} onClick={() => setPage("organize")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "organize" ? undefined : "transparent" }}><FolderOpen size={18}/> Organizar fotografías</button>
-      <div className="sidebar-status"><ShieldCheck size={17}/><div><strong>Tu biblioteca está protegida</strong><span>Sin cambios en tus archivos</span></div></div><div className="foot">PhotoVault v0.1.0 · Vista previa</div>
+      <div className="sidebar-status"><ShieldCheck size={17}/><div><strong>Tu biblioteca está protegida</strong><span>Solo la Papelera, y solo si lo confirmas</span></div></div><div className="foot">PhotoVault v0.1.0 · Vista previa</div>
     </aside>
     <main>
-      <div className="topline"><div className="eyebrow">{page === "library" ? "BIBLIOTECA LOCAL" : page === "duplicates" ? "DUPLICADOS EXACTOS" : page === "organize" ? "PLAN DE ORGANIZACIÓN" : "SIMILITUD VISUAL"}</div><span className="readonly-pill"><ShieldCheck size={14}/> Modo seguro · Solo lectura</span></div>
+      <div className="topline"><div className="eyebrow">{page === "library" ? "BIBLIOTECA LOCAL" : page === "duplicates" ? "DUPLICADOS EXACTOS" : page === "organize" ? "PLAN DE ORGANIZACIÓN" : "SIMILITUD VISUAL"}</div><span className="readonly-pill"><ShieldCheck size={14}/> {page === "duplicates" ? "Modo seguro · Papelera reversible" : "Modo seguro · Solo lectura"}</span></div>
       <h1>{page === "library" ? "Tu colección, bajo control." : page === "duplicates" ? "Duplicados confirmados." : page === "organize" ? "Organiza sin arriesgar tus recuerdos." : "Posibles fotografías relacionadas."}</h1>
-      <p className="intro">{page === "library" ? "Selecciona una biblioteca y explora su contenido." : page === "duplicates" ? "Archivos con el mismo contenido, verificados mediante hash criptográfico. No se borrará nada." : page === "organize" ? "Vista previa de carpetas sugeridas, capturas y posible basura. Sin mover, renombrar ni borrar archivos." : "Sugerencias basadas en características visuales; pueden existir coincidencias incorrectas. Tú decides qué conservar."}</p>
+      <p className="intro">{page === "library" ? "Selecciona una biblioteca y explora su contenido." : page === "duplicates" ? "Archivos con el mismo contenido, verificados byte a byte. Elige qué copia conservar y envía las demás a la Papelera; puedes deshacerlo." : page === "organize" ? "Vista previa de carpetas sugeridas, capturas y posible basura. Sin mover, renombrar ni borrar archivos." : "Sugerencias basadas en características visuales; pueden existir coincidencias incorrectas. Tú decides qué conservar."}</p>
       <section className="panel library-selector">
         <div className="section-heading"><span className="section-icon"><FolderOpen size={20}/></span><div><h2>{page === "library" ? "Tu carpeta de fotografías" : "Biblioteca seleccionada"}</h2><p>{folder ? "Origen de los archivos que analizaremos" : "Elige una carpeta para comenzar. No modificaremos su contenido."}</p></div></div>
         <div className="actions" style={{ flexWrap: "wrap" }}>
@@ -261,9 +270,9 @@ export default function App() {
       </section>}
       {page === "duplicates" && !duplicates && !busy && <section className="panel"><p>Ejecuta el análisis para encontrar archivos idénticos en la carpeta seleccionada.</p></section>}
       {page === "duplicates" && duplicates && <><div className="stats"><div className="stat"><span>Grupos exactos</span><strong>{fmt(duplicates.groups.length)}</strong></div><div className="stat"><span>Espacio redundante estimado</span><strong>{humanSize(duplicates.redundant_bytes)}</strong></div><div className="stat"><span>Hashes reutilizados</span><strong>{fmt(duplicates.cache_hits)}</strong></div></div>
-        <section className="panel"><h2>Duplicados confirmados · mismo contenido</h2><p>Hashes calculados: {fmt(duplicates.hashes_computed)} · Caché SQLite: {duplicates.cache_available ? "disponible" : "no disponible"} · Errores: {fmt(duplicates.errors)}</p><p>Confirmación de contenido idéntico mediante hash criptográfico al momento del análisis. El nombre, la ubicación y los metadatos del sistema de archivos pueden diferir. Ningún archivo será eliminado; los resultados pueden quedar obsoletos si cambia la biblioteca.</p>
-        {duplicates.groups.length === 0 && <p>No se encontraron duplicados exactos.</p>}
-        {duplicates.groups.map((group, i) => <div className="duplicate-group" key={i}><strong>Grupo {i+1} · {fmt(group.paths.length)} archivos · {humanSize(group.size_bytes)} por archivo · Contenido idéntico verificado</strong><div className="photo-grid">{group.paths.map(path => <div className="photo-grid-item" key={path}><PhotoPreview root={folder} path={path}/><div className="duplicate-path" title={path}>{path}</div></div>)}</div></div>)}</section></>}
+        <section className="panel"><h2>Duplicados confirmados · mismo contenido</h2><p>Hashes calculados: {fmt(duplicates.hashes_computed)} · Caché SQLite: {duplicates.cache_available ? "disponible" : "no disponible"} · Errores: {fmt(duplicates.errors)}</p><p>Contenido idéntico confirmado al momento del análisis. El nombre, la ubicación y los metadatos del sistema de archivos pueden diferir. Nada se mueve hasta que lo confirmes.</p>
+        {duplicates.groups.length === 0 && <p>No hay duplicados exactos pendientes.</p>}</section>
+        <DuplicateCleanup key={folder} root={folder} groups={duplicates.groups} renderPreview={path => <PhotoPreview root={folder} path={path}/>} onCleaned={removeCleaned}/></>}
       {page === "similar" && !similar && !busy && <section className="panel"><p>Ejecuta el análisis para descubrir fotografías visualmente similares.</p></section>}
       {page === "similar" && similar && <section className="panel similarity-results"><div className="section-heading"><span className="section-icon"><Sparkles size={21}/></span><div><h2>Posibles fotografías relacionadas</h2><p>Sugerencias experimentales de pHash · No equivalen a duplicados confirmados</p></div></div>
         <p>Analizadas: {fmt(similar.analyzed)} · Omitidas por límite de 3,000: {fmt(similar.skipped)} · Errores: {fmt(similar.errors)} · Umbral pHash: {similar.threshold}/64</p>
@@ -296,6 +305,6 @@ export default function App() {
           {similar.pairs.length > visiblePairs && <button className="secondary" onClick={() => setVisiblePairs(n => n + 20)}>Mostrar 20 parejas más ({fmt(similar.pairs.length - visiblePairs)} pendientes)</button>}
         </>}
       </section>}
-      <div className="notice"><CheckCircle2 size={20}/><span>PhotoVault funciona en modo solo lectura. Los duplicados exactos se verifican por contenido; las similitudes visuales son sugerencias. Nunca se eliminan ni modifican tus fotografías.</span></div>
+      <div className="notice"><CheckCircle2 size={20}/><span>PhotoVault solo analiza hasta que tú decides. Los duplicados exactos se verifican por contenido y únicamente se envían a la Papelera tras tu confirmación; las similitudes visuales son sugerencias. Nunca se borra nada de forma definitiva.</span></div>
     </main></div>;
 }

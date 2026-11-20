@@ -5,6 +5,7 @@ use std::io::Cursor;
 use std::{collections::BTreeMap, fs, path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}};
 use tauri::{Emitter, State};
 
+mod cleanup;
 mod decisions;
 mod duplicates;
 mod hash_cache;
@@ -149,6 +150,24 @@ async fn preview_photo(root: String, path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn trash_duplicates(root: String, groups: Vec<cleanup::CleanupGroup>) -> Result<cleanup::CleanupResult, String> {
+    tauri::async_runtime::spawn_blocking(move || cleanup::move_duplicates_to_trash(&PathBuf::from(root), groups))
+        .await.map_err(|e| format!("Error en la limpieza: {e}"))?
+}
+
+#[tauri::command]
+async fn cleanup_history(root: String) -> Result<Vec<cleanup::BatchSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || cleanup::history(&PathBuf::from(root)))
+        .await.map_err(|e| format!("No se pudo leer el historial: {e}"))?
+}
+
+#[tauri::command]
+async fn restore_cleanup(root: String, batch_id: String) -> Result<cleanup::RestoreResult, String> {
+    tauri::async_runtime::spawn_blocking(move || cleanup::restore_batch(&PathBuf::from(root), &batch_id))
+        .await.map_err(|e| format!("Error al restaurar: {e}"))?
+}
+
+#[tauri::command]
 fn cancel_duplicate_scan(state: State<'_, ScanState>) -> Result<(), String> {
     let slot = state.0.lock().map_err(|_| "Estado de análisis no disponible")?;
     if let Some(token) = slot.as_ref() { token.store(true, Ordering::Relaxed); }
@@ -160,7 +179,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ScanState::default())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates, find_similar_photos, preview_organization, save_photo_decision, get_photo_decision, preview_photo, cancel_duplicate_scan])
+        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates, find_similar_photos, preview_organization, save_photo_decision, get_photo_decision, preview_photo, cancel_duplicate_scan, trash_duplicates, cleanup_history, restore_cleanup])
         .run(tauri::generate_context!())
         .expect("No se pudo iniciar PhotoVault");
 }

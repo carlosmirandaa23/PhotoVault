@@ -77,6 +77,12 @@ fn equal_bytes(a: &Candidate, b: &Candidate, cancel: &AtomicBool) -> io::Result<
     Ok(stable(a)? && stable(b)?)
 }
 
+/// Fresh byte-for-byte comparison of two paths, used right before any cleanup action.
+pub(crate) fn identical_files(a: &Path, b: &Path) -> io::Result<bool> {
+    let (a, b) = (snapshot(a)?, snapshot(b)?);
+    equal_bytes(&a, &b, &AtomicBool::new(false))
+}
+
 fn is_media(path: &Path) -> bool {
     let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("").to_ascii_lowercase();
     matches!(ext.as_str(), "jpg"|"jpeg"|"png"|"webp"|"gif"|"bmp"|"tif"|"tiff"|"heic"|"heif"|"avif"|"dng"|"cr2"|"nef"|"arw"|"raf"|"orf"|"rw2"|"mp4"|"mov"|"avi"|"mkv"|"mts"|"3gp")
