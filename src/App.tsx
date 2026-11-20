@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -12,11 +12,32 @@ type DuplicateReport = { scanned_files: number; errors: number; groups: Duplicat
 const fmt = (n: number) => n.toLocaleString("es-MX");
 const gb = (n: number) => (n / 1073741824).toFixed(2) + " GB";
 
+function PhotoPreview({ root, path }: { root: string; path: string }) {
+  const [src, setSrc] = useState("");
+  const [failed, setFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    setSrc(""); setFailed(false);
+    invoke<string>("preview_photo", { root, path })
+      .then(value => { if (active) setSrc(value); })
+      .catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [root, path]);
+  const name = path.split(/[\\/]/).pop() ?? path;
+  return <div style={{ minWidth: 0, flex: "1 1 220px" }}>
+    <div style={{ height: 180, display: "flex", alignItems: "center", justifyContent: "center", background: "#101521", borderRadius: 8, overflow: "hidden" }}>
+      {src ? <img src={src} alt={name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} /> : <span style={{ opacity: .65 }}>{failed ? "Vista previa no disponible" : "Cargando miniatura…"}</span>}
+    </div>
+    <div className="duplicate-path" title={path} style={{ overflowWrap: "anywhere", marginTop: 8 }}>{name}</div>
+  </div>;
+}
+
 export default function App() {
   const [folder, setFolder] = useState("");
   const [result, setResult] = useState<ScanSummary | null>(null);
   const [duplicates, setDuplicates] = useState<DuplicateReport | null>(null);
   const [similar, setSimilar] = useState<SimilarityReport | null>(null);
+  const [visiblePairs, setVisiblePairs] = useState(20);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [progress, setProgress] = useState<ScanProgress | null>(null);
@@ -47,7 +68,7 @@ export default function App() {
   }
   async function checkSimilar() {
     if (!folder || busy) return;
-    setBusy(true); setError(""); setSimilar(null); setProgress({ phase: "preparando", processed: 0, total: 0 }); setCancelling(false);
+    setBusy(true); setError(""); setSimilar(null); setVisiblePairs(20); setProgress({ phase: "preparando", processed: 0, total: 0 }); setCancelling(false);
     let unlisten: (() => void) | undefined;
     try {
       unlisten = await listen<ScanProgress>("photovault:scan-progress", event => setProgress(event.payload));
@@ -80,8 +101,14 @@ export default function App() {
         <p>Analizadas: {fmt(similar.analyzed)} · Omitidas por límite de 3,000: {fmt(similar.skipped)} · Errores: {fmt(similar.errors)} · Umbral pHash: {similar.threshold}/64</p>
         <p>Coincidencias probables, no duplicados confirmados. Distancia menor indica mayor parecido; revisa cada pareja antes de actuar.</p>
         {similar.pairs.length === 0 && <p>No se encontraron coincidencias dentro del umbral.</p>}
-        {similar.pairs.slice(0, 300).map((pair,i) => <div className="duplicate-group" key={i}><strong>Pareja {i+1} · Distancia {pair.distance}/64</strong><div className="duplicate-path">{pair.first}</div><div className="duplicate-path">{pair.second}</div></div>)}
-        {similar.pairs.length > 300 && <p>Mostrando 300 de {fmt(similar.pairs.length)} parejas.</p>}
+        {similar.pairs.slice(0, visiblePairs).map((pair,i) => <div className="duplicate-group" key={i}>
+          <strong>Pareja {i+1} · Distancia {pair.distance}/64</strong>
+          <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
+            <PhotoPreview root={folder} path={pair.first} />
+            <PhotoPreview root={folder} path={pair.second} />
+          </div>
+        </div>)}
+        {similar.pairs.length > visiblePairs && <button className="secondary" onClick={() => setVisiblePairs(n => n + 20)}>Mostrar 20 parejas más ({fmt(similar.pairs.length - visiblePairs)} pendientes)</button>}
       </section>}
       <div className="notice"><ShieldCheck size={20}/><span>Modo seguro: inventario y comparación de bytes de solo lectura. No se eliminan archivos. La similitud visual es experimental y no implica igualdad de archivos.</span></div>
     </main></div>;
