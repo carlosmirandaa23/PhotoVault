@@ -4,6 +4,7 @@ use tauri::{Emitter, State};
 
 mod duplicates;
 mod hash_cache;
+mod similarity;
 
 #[derive(Default)]
 struct ScanState(Mutex<Option<Arc<AtomicBool>>>);
@@ -79,6 +80,30 @@ async fn find_exact_duplicates(
 }
 
 #[tauri::command]
+async fn find_similar_photos(
+    root: String,
+    app: tauri::AppHandle,
+    state: State<'_, ScanState>,
+) -> Result<similarity::SimilarityReport, String> {
+    let token = Arc::new(AtomicBool::new(false));
+    {
+        let mut slot = state.0.lock().map_err(|_| "Estado de análisis no disponible")?;
+        if slot.is_some() { return Err("Ya hay un análisis en curso".into()); }
+        *slot = Some(token.clone());
+    }
+    let token_for_work = token.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        similarity::scan(&PathBuf::from(root), &token_for_work, |processed,total| {
+            let _ = app.emit("photovault:scan-progress", ScanProgress {
+                phase: "similitud".to_owned(), processed, total
+            });
+        })
+    }).await.map_err(|e| format!("Error en el análisis: {e}"));
+    if let Ok(mut slot) = state.0.lock() { *slot = None; }
+    result?
+}
+
+#[tauri::command]
 fn cancel_duplicate_scan(state: State<'_, ScanState>) -> Result<(), String> {
     let slot = state.0.lock().map_err(|_| "Estado de análisis no disponible")?;
     if let Some(token) = slot.as_ref() { token.store(true, Ordering::Relaxed); }
@@ -90,7 +115,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ScanState::default())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates, cancel_duplicate_scan])
+        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates, find_similar_photos, cancel_duplicate_scan])
         .run(tauri::generate_context!())
         .expect("No se pudo iniciar PhotoVault");
 }
