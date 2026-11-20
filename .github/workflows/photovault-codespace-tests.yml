@@ -4,6 +4,15 @@ name: PhotoVault - Codespace tests (self-hosted only)
 on:
   workflow_dispatch:
     inputs:
+      target_branch:
+        description: "Branch to validate (checkout target)"
+        required: true
+        type: choice
+        options:
+          - feature/perceptual-similarity
+          - develop
+          - main
+        default: feature/perceptual-similarity
       rust_tests:
         description: "Run Rust unit tests (requires Tauri Linux dependencies)"
         required: true
@@ -27,6 +36,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           persist-credentials: false
+          ref: ${{ inputs.target_branch }}
       - name: Environment
         run: |
           node --version
@@ -71,8 +81,9 @@ jobs:
           {
             echo '## PhotoVault validation'
             echo ''
-            echo "- Branch: ${GITHUB_REF_NAME}"
-            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Workflow branch: ${GITHUB_REF_NAME}"
+            echo "- Tested branch: ${{ inputs.target_branch }}"
+            echo "- Tested commit: $(git rev-parse HEAD)"
             echo "- Rust requested: ${{ inputs.rust_tests }}"
             echo "- Runner: self-hosted Codespace (not GitHub-hosted)"
           } >> "$GITHUB_STEP_SUMMARY"
