@@ -1,4 +1,7 @@
 use serde::Serialize;
+use base64::Engine;
+use image::imageops::FilterType;
+use std::io::Cursor;
 use std::{collections::BTreeMap, fs, path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}};
 use tauri::{Emitter, State};
 
@@ -104,6 +107,27 @@ async fn find_similar_photos(
 }
 
 #[tauri::command]
+async fn preview_photo(root: String, path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(root).canonicalize().map_err(|e| e.to_string())?;
+        let path = PathBuf::from(path).canonicalize().map_err(|e| e.to_string())?;
+        if !path.starts_with(&root) || !path.is_file() {
+            return Err("La fotografía está fuera de la carpeta seleccionada".into());
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !["jpg","jpeg","png","webp","bmp","gif","tif","tiff"].contains(&ext.as_str()) {
+            return Err("Formato no compatible con miniaturas".into());
+        }
+        let img = image::open(&path).map_err(|e| format!("No se pudo abrir la fotografía: {e}"))?;
+        let thumb = img.resize(360, 240, FilterType::Triangle);
+        let mut bytes = Cursor::new(Vec::new());
+        thumb.write_to(&mut bytes, image::ImageFormat::Jpeg)
+            .map_err(|e| format!("No se pudo generar miniatura: {e}"))?;
+        Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())))
+    }).await.map_err(|e| format!("Error al generar miniatura: {e}"))?
+}
+
+#[tauri::command]
 fn cancel_duplicate_scan(state: State<'_, ScanState>) -> Result<(), String> {
     let slot = state.0.lock().map_err(|_| "Estado de análisis no disponible")?;
     if let Some(token) = slot.as_ref() { token.store(true, Ordering::Relaxed); }
@@ -115,7 +139,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(ScanState::default())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates, find_similar_photos, cancel_duplicate_scan])
+        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates, find_similar_photos, preview_photo, cancel_duplicate_scan])
         .run(tauri::generate_context!())
         .expect("No se pudo iniciar PhotoVault");
 }
