@@ -5,7 +5,7 @@ import { FolderOpen, Images, ScanSearch, ShieldCheck, AlertTriangle } from "luci
 
 type ScanSummary = { root: string; files: number; bytes: number; errors: number; by_extension: Record<string, number> };
 type DuplicateGroup = { size_bytes: number; paths: string[] };
-type DuplicateReport = { scanned_files: number; errors: number; groups: DuplicateGroup[]; redundant_bytes: number };
+type DuplicateReport = { scanned_files: number; errors: number; groups: DuplicateGroup[]; redundant_bytes: number; cache_hits: number; hashes_computed: number; cache_available: boolean };
 const fmt = (n: number) => n.toLocaleString("es-MX");
 const gb = (n: number) => (n / 1073741824).toFixed(2) + " GB";
 
@@ -46,8 +46,8 @@ export default function App() {
       {error && <div className="error"><AlertTriangle size={18}/>{error}</div>}
       {result && <><div className="stats"><div className="stat"><span>Archivos multimedia</span><strong>{fmt(result.files)}</strong></div><div className="stat"><span>Espacio total</span><strong>{gb(result.bytes)}</strong></div><div className="stat"><span>Errores de acceso</span><strong>{result.errors}</strong></div></div>
         <section className="panel"><h2>Formatos encontrados</h2><div className="formats">{extensions.map(([ext,count]) => <div key={ext} className="format"><span>{ext.toUpperCase()}</span><strong>{fmt(count)}</strong></div>)}</div></section></>}
-      {duplicates && <><div className="stats"><div className="stat"><span>Grupos exactos</span><strong>{fmt(duplicates.groups.length)}</strong></div><div className="stat"><span>Espacio redundante estimado</span><strong>{gb(duplicates.redundant_bytes)}</strong></div><div className="stat"><span>Errores de análisis</span><strong>{fmt(duplicates.errors)}</strong></div></div>
-        <section className="panel"><h2>Archivos idénticos por bytes</h2><p>Coincidencias verificadas al analizar. Ningún archivo será eliminado; los resultados pueden quedar obsoletos si cambia la biblioteca.</p>
+      {duplicates && <><div className="stats"><div className="stat"><span>Grupos exactos</span><strong>{fmt(duplicates.groups.length)}</strong></div><div className="stat"><span>Espacio redundante estimado</span><strong>{gb(duplicates.redundant_bytes)}</strong></div><div className="stat"><span>Hashes reutilizados</span><strong>{fmt(duplicates.cache_hits)}</strong></div></div>
+        <section className="panel"><h2>Archivos idénticos por bytes</h2><p>Hashes calculados: {fmt(duplicates.hashes_computed)} · Caché SQLite: {duplicates.cache_available ? "disponible" : "no disponible"} · Errores: {fmt(duplicates.errors)}</p><p>Coincidencias verificadas al analizar. Ningún archivo será eliminado; los resultados pueden quedar obsoletos si cambia la biblioteca.</p>
         {duplicates.groups.length === 0 && <p>No se encontraron duplicados exactos.</p>}
         {duplicates.groups.map((group, i) => <div className="duplicate-group" key={i}><strong>Grupo {i+1} · {fmt(group.paths.length)} copias · {gb(group.size_bytes)} por archivo</strong>{group.paths.map(path => <div className="duplicate-path" key={path} title={path}>{path}</div>)}</div>)}</section></>}
       <div className="notice"><ShieldCheck size={20}/><span>Modo seguro: inventario y comparación de bytes de solo lectura. No se eliminan archivos. Las fotos recortadas o recomprimidas requieren un análisis visual posterior.</span></div>
