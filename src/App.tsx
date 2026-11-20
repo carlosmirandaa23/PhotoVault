@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { FolderOpen, Images, ScanSearch, ShieldCheck, AlertTriangle } from "lucide-react";
+import { FolderOpen, Images, ScanSearch, ShieldCheck, AlertTriangle, ArrowRight, CheckCircle2, Clock3, Layers3, Sparkles } from "lucide-react";
 
 type ScanSummary = { root: string; files: number; bytes: number; errors: number; by_extension: Record<string, number> };
 type SimilarityReport = { analyzed: number; skipped: number; errors: number; threshold: number; pairs: { first: string; second: string; distance: number }[] };
@@ -97,11 +97,11 @@ function PhotoPreview({ root, path }: { root: string; path: string }) {
     return () => { active = false; };
   }, [root, path]);
   const name = path.split(/[\\/]/).pop() ?? path;
-  return <div style={{ minWidth: 0, flex: "1 1 220px" }}>
-    <div style={{ height: 180, display: "flex", alignItems: "center", justifyContent: "center", background: "#101521", borderRadius: 8, overflow: "hidden" }}>
-      {src ? <img src={src} alt={name} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} /> : <span style={{ opacity: .65 }}>{failed ? "Vista previa no disponible" : "Cargando miniatura…"}</span>}
+  return <div className="photo-tile">
+    <div className="photo-tile-media">
+      {src ? <img src={src} alt={name} loading="lazy" /> : <span style={{ opacity: .65 }}>{failed ? "Vista previa no disponible" : "Cargando miniatura…"}</span>}
     </div>
-    <div className="duplicate-path" title={path} style={{ overflowWrap: "anywhere", marginTop: 8 }}>{name}</div>
+    <div className="photo-tile-name" title={path}>{name}</div>
   </div>;
 }
 
@@ -162,18 +162,18 @@ export default function App() {
   const extensions = Object.entries(result?.by_extension ?? {}).sort((a,b) => b[1]-a[1]);
   return <div className="shell">
     <aside className="sidebar">
-      <div className="brand"><Images size={26}/><span>PhotoVault</span></div>
+      <div className="brand"><span className="brand-mark"><Images size={23}/></span><span>PhotoVault<small>PHOTO LIBRARY</small></span></div><div className="sidebar-label">EXPLORAR</div>
       <button className={page === "library" ? "nav active" : "nav"} onClick={() => setPage("library")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "library" ? undefined : "transparent" }}><ScanSearch size={18}/> Biblioteca</button>
       <button className={page === "duplicates" ? "nav active" : "nav"} onClick={() => setPage("duplicates")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "duplicates" ? undefined : "transparent" }}><ShieldCheck size={18}/> Duplicados exactos</button>
       <button className={page === "similar" ? "nav active" : "nav"} onClick={() => setPage("similar")} style={{ width: "100%", textAlign: "left", border: 0, cursor: "pointer", background: page === "similar" ? undefined : "transparent" }}><Images size={18}/> Similitud visual</button>
-      <div className="foot">v0.1.0 · Solo lectura</div>
+      <div className="sidebar-status"><ShieldCheck size={17}/><div><strong>Tu biblioteca está protegida</strong><span>Sin cambios en tus archivos</span></div></div><div className="foot">PhotoVault v0.1.0 · Vista previa</div>
     </aside>
     <main>
-      <div className="eyebrow">{page === "library" ? "BIBLIOTECA LOCAL" : page === "duplicates" ? "DUPLICADOS EXACTOS" : "SIMILITUD VISUAL"}</div>
+      <div className="topline"><div className="eyebrow">{page === "library" ? "BIBLIOTECA LOCAL" : page === "duplicates" ? "DUPLICADOS EXACTOS" : "SIMILITUD VISUAL"}</div><span className="readonly-pill"><ShieldCheck size={14}/> Modo seguro · Solo lectura</span></div>
       <h1>{page === "library" ? "Tu colección, bajo control." : page === "duplicates" ? "Archivos idénticos." : "Fotografías similares."}</h1>
       <p className="intro">{page === "library" ? "Selecciona una biblioteca y explora su contenido." : page === "duplicates" ? "Identifica copias verificadas byte a byte." : "Revisa coincidencias perceptuales antes de tomar decisiones."}</p>
-      <section className="panel">
-        <h2>{page === "library" ? "Seleccionar carpeta" : "Biblioteca seleccionada"}</h2>
+      <section className="panel library-selector">
+        <div className="section-heading"><span className="section-icon"><FolderOpen size={20}/></span><div><h2>{page === "library" ? "Tu carpeta de fotografías" : "Biblioteca seleccionada"}</h2><p>{folder ? "Origen de los archivos que analizaremos" : "Elige una carpeta para comenzar. No modificaremos su contenido."}</p></div></div>
         <div className="actions" style={{ flexWrap: "wrap" }}>
           <button className="secondary" onClick={chooseFolder} disabled={busy}><FolderOpen size={18}/> {folder ? "Cambiar carpeta" : "Examinar"}</button>
           <div className="path" title={folder} style={{ overflowWrap: "anywhere", minWidth: 0 }}>{folder || "Ninguna carpeta seleccionada"}</div>
@@ -183,11 +183,8 @@ export default function App() {
           {busy && progress && <button className="secondary" onClick={cancelScan} disabled={cancelling}>{cancelling ? "Cancelando…" : "Cancelar análisis"}</button>}
         </div>
       </section>
-      {page === "library" && folder && <section className="panel"><h2>¿Qué quieres hacer?</h2><div className="actions" style={{ flexWrap: "wrap" }}>
-        <button onClick={() => setPage("duplicates")}><ShieldCheck size={17}/> Buscar duplicados exactos</button>
-        <button onClick={() => setPage("similar")}><Images size={17}/> Buscar fotografías similares</button>
-      </div></section>}
-      {progress && <section className="panel" role="status"><h2>Progreso del análisis</h2><p>Etapa: {progress.phase} · {fmt(progress.processed)} / {progress.total ? fmt(progress.total) : "calculando"} archivos candidatos</p>{progress.total > 0 && <progress max={progress.total} value={progress.processed} style={{width:"100%"}} />}</section>}
+      {page === "library" && folder && <section className="workflows"><div className="section-heading"><div><h2>¿Qué te gustaría revisar?</h2><p>Elige una herramienta para explorar tu colección.</p></div></div><div className="workflow-grid"><button className="workflow-card" onClick={() => setPage("duplicates")}><span className="workflow-icon"><Layers3 size={23}/></span><strong>Duplicados exactos</strong><span>Localiza archivos idénticos y descubre cuánto espacio ocupan las copias.</span><span className="workflow-link">Explorar copias <ArrowRight size={16}/></span></button><button className="workflow-card" onClick={() => setPage("similar")}><span className="workflow-icon violet"><Sparkles size={23}/></span><strong>Fotografías similares</strong><span>Compara versiones editadas y tomas parecidas en una galería visual.</span><span className="workflow-link">Explorar similitudes <ArrowRight size={16}/></span></button></div></section>}
+      {progress && <section className="panel progress-panel" role="status" aria-live="polite"><div className="progress-header"><div><h2>Análisis en curso</h2><p>Etapa: {progress.phase} · {fmt(progress.processed)} de {progress.total ? fmt(progress.total) : "total por calcular"} archivos</p></div><Clock3 size={22}/></div>{progress.total > 0 && <><progress max={progress.total} value={progress.processed} /><span className="progress-caption">{Math.min(100,Math.round(progress.processed/progress.total*100))}% completado</span></>}</section>}
       {error && <div className="error"><AlertTriangle size={18}/>{error}</div>}
       {page === "library" && result && <><div className="stats"><div className="stat"><span>Archivos multimedia</span><strong>{fmt(result.files)}</strong></div><div className="stat"><span>Espacio total</span><strong>{gb(result.bytes)}</strong></div><div className="stat"><span>Errores de acceso</span><strong>{result.errors}</strong></div></div>
         <section className="panel"><h2>Formatos encontrados</h2><div className="formats">{extensions.map(([ext,count]) => <div key={ext} className="format"><span>{ext.toUpperCase()}</span><strong>{fmt(count)}</strong></div>)}</div></section></>}
@@ -197,20 +194,20 @@ export default function App() {
         {duplicates.groups.length === 0 && <p>No se encontraron duplicados exactos.</p>}
         {duplicates.groups.map((group, i) => <div className="duplicate-group" key={i}><strong>Grupo {i+1} · {fmt(group.paths.length)} copias · {gb(group.size_bytes)} por archivo</strong>{group.paths.map(path => <div className="duplicate-path" key={path} title={path}>{path}</div>)}</div>)}</section></>}
       {page === "similar" && !similar && !busy && <section className="panel"><p>Ejecuta el análisis para descubrir fotografías visualmente similares.</p></section>}
-      {page === "similar" && similar && <section className="panel"><h2>Fotografías visualmente similares · Experimental</h2>
+      {page === "similar" && similar && <section className="panel similarity-results"><div className="section-heading"><span className="section-icon"><Sparkles size={21}/></span><div><h2>Galería de coincidencias</h2><p>Resultados experimentales · Revisa cada fotografía antes de decidir</p></div></div>
         <p>Analizadas: {fmt(similar.analyzed)} · Omitidas por límite de 3,000: {fmt(similar.skipped)} · Errores: {fmt(similar.errors)} · Umbral pHash: {similar.threshold}/64</p>
         <p>Coincidencias probables, no duplicados confirmados. La agrupación exige que cada fotografía coincida con todas las demás del mismo grupo; no elimina archivos.</p>
-        <div className="actions" style={{ marginBottom: 16 }}>
+        <div className="actions view-switcher">
           <button className={similarityView === "groups" ? "" : "secondary"} onClick={() => setSimilarityView("groups")}>Galería de grupos ({fmt(visualGroups.length)})</button>
           <button className={similarityView === "pairs" ? "" : "secondary"} onClick={() => setSimilarityView("pairs")}>Ver parejas ({fmt(similar.pairs.length)})</button>
         </div>
         {similarityView === "groups" ? <>
           {visualGroups.length === 0 && <p>No se encontraron grupos visuales con al menos dos fotografías.</p>}
-          {visualGroups.slice(0, visibleGroups).map((group,i) => <div className="duplicate-group" key={group.paths[0]}>
+          {visualGroups.slice(0, visibleGroups).map((group,i) => <div className="duplicate-group visual-group" key={group.paths[0]}>
             <strong>Grupo {i+1} · {fmt(group.paths.length)} fotografías · Distancia máxima interna {group.maxDistance}/64</strong>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))", gap: 14, marginTop: 12 }}>
-              {group.paths.map((path,j) => <div key={path} style={{ minWidth: 0 }}>
-                {j === 0 && <div style={{ marginBottom: 6, fontSize: 12, opacity: .8 }}>Referencia del grupo</div>}
+            <div className="photo-grid">
+              {group.paths.map((path,j) => <div key={path} className="photo-grid-item">
+                {j === 0 && <div className="reference-label">Primera coincidencia · no verificada como original</div>}
                 <PhotoPreview root={folder} path={path} />
               </div>)}
             </div>
@@ -220,7 +217,7 @@ export default function App() {
           {similar.pairs.length === 0 && <p>No se encontraron coincidencias dentro del umbral.</p>}
           {similar.pairs.slice(0, visiblePairs).map((pair,i) => <div className="duplicate-group" key={i}>
             <strong>Pareja {i+1} · Distancia {pair.distance}/64</strong>
-            <div style={{ display: "flex", gap: 14, flexWrap: "wrap", marginTop: 12 }}>
+            <div className="photo-pair">
               <PhotoPreview root={folder} path={pair.first} />
               <PhotoPreview root={folder} path={pair.second} />
             </div>
@@ -228,6 +225,6 @@ export default function App() {
           {similar.pairs.length > visiblePairs && <button className="secondary" onClick={() => setVisiblePairs(n => n + 20)}>Mostrar 20 parejas más ({fmt(similar.pairs.length - visiblePairs)} pendientes)</button>}
         </>}
       </section>}
-      <div className="notice"><ShieldCheck size={20}/><span>Modo seguro: inventario y comparación de bytes de solo lectura. No se eliminan archivos. La similitud visual es experimental y no implica igualdad de archivos.</span></div>
+      <div className="notice"><CheckCircle2 size={20}/><span>Tu colección permanece intacta. PhotoVault solo analiza archivos; no los modifica ni elimina. Las similitudes visuales no son duplicados confirmados.</span></div>
     </main></div>;
 }
