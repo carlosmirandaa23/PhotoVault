@@ -126,4 +126,77 @@ mod tests {
         assert_eq!(phash(&path).unwrap(), phash(&path).unwrap());
         fs::remove_file(path).unwrap();
     }
+    /// Benchmark the 65-image fixture. Not a pass/fail quality gate yet:
+    /// report precision/recall and false positives before changing algorithms.
+    #[test]
+    #[ignore = "requires PHOTOVAULT_TEST_DIR pointing to the 65-image fixture"]
+    fn benchmark_labeled_photo_families() {
+        use std::collections::BTreeMap;
+        let dir = PathBuf::from(std::env::var("PHOTOVAULT_TEST_DIR")
+            .expect("Define PHOTOVAULT_TEST_DIR con la ruta de las 65 fotos"));
+        let mut images = Vec::new();
+        for entry in fs::read_dir(&dir).expect("No se puede abrir la carpeta") {
+            let path = entry.expect("Entrada inválida").path();
+            if !path.is_file() { continue; }
+            let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            let mut parts = stem.splitn(3, '_');
+            let family = parts.next().unwrap_or("");
+            let variant = parts.next().unwrap_or("");
+            if !matches!(family, "F01" | "F02" | "F03" | "F04" | "F05") { continue; }
+            if variant.parse::<u8>().is_err() { continue; }
+            images.push((family.to_string(), variant.to_string(), path));
+        }
+        images.sort_by(|a,b| a.2.cmp(&b.2));
+        assert_eq!(images.len(), 65, "Se esperaban exactamente 65 fotografías etiquetadas");
+        let hashes: Vec<u64> = images.iter().map(|(_,_,p)| phash(p).expect("No se pudo calcular pHash")).collect();
+        println!("\\nBENCHMARK PHOTOVAULT — {} fotografías", images.len());
+        println!("Verdad de referencia: misma familia Fxx = misma captura editada; familias diferentes = tomas distintas.");
+        println!("Umbral | TP | FP | FN | TN | Precisión | Recall");
+        for threshold in [0u32, 2, 4, 6, 8, 10, 12] {
+            let (mut tp,mut fp,mut fn_,mut tn) = (0u32,0u32,0u32,0u32);
+            let mut false_positives = Vec::new();
+            for i in 0..images.len() {
+                for j in i+1..images.len() {
+                    let same_capture = images[i].0 == images[j].0;
+                    let predicted = (hashes[i] ^ hashes[j]).count_ones() <= threshold;
+                    match (same_capture,predicted) {
+                        (true,true) => tp += 1,
+                        (false,true) => {
+                            fp += 1;
+                            if threshold == 8 && false_positives.len() < 15 {
+                                false_positives.push(format!("{} <> {}",
+                                    images[i].2.file_name().unwrap().to_string_lossy(),
+                                    images[j].2.file_name().unwrap().to_string_lossy()));
+                            }
+                        }
+                        (true,false) => fn_ += 1,
+                        (false,false) => tn += 1,
+                    }
+                }
+            }
+            let precision = if tp+fp == 0 { 1.0 } else { tp as f64 / (tp+fp) as f64 };
+            let recall = if tp+fn_ == 0 { 1.0 } else { tp as f64 / (tp+fn_) as f64 };
+            println!("{threshold:>6} | {tp:>3} | {fp:>3} | {fn_:>3} | {tn:>4} | {precision:>8.2}% | {recall:>6.2}%",
+                precision=precision*100.0, recall=recall*100.0);
+            if threshold == 8 {
+                println!("Ejemplos de falsos positivos (umbral 8):");
+                for example in false_positives { println!("  {example}"); }
+            }
+        }
+        println!("Distancia al ORIGINAL por variante:");
+        let mut by_variant: BTreeMap<String,Vec<u32>> = BTreeMap::new();
+        for i in 0..images.len() {
+            if images[i].1 != "00" { continue; }
+            for j in 0..images.len() {
+                if images[j].0 == images[i].0 && j != i {
+                    by_variant.entry(images[j].1.clone()).or_default()
+                        .push((hashes[i]^hashes[j]).count_ones());
+                }
+            }
+        }
+        for (variant, distances) in by_variant {
+            println!("  Variante {variant}: {:?}", distances);
+        }
+    }
+
 }
