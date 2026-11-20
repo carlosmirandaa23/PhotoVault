@@ -2,6 +2,7 @@ use serde::Serialize;
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
 mod duplicates;
+mod hash_cache;
 
 #[derive(Serialize)]
 struct ScanSummary {

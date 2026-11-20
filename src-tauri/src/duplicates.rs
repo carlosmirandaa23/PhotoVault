@@ -2,7 +2,7 @@
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
-    fs::{self, File, Metadata},
+    fs::{self, File},
     io::{self, BufReader, Read},
     path::{Path, PathBuf},
     time::SystemTime,
@@ -20,6 +20,9 @@ pub struct DuplicateReport {
     pub errors: u64,
     pub groups: Vec<DuplicateGroup>,
     pub redundant_bytes: u64,
+    pub cache_hits: u64,
+    pub hashes_computed: u64,
+    pub cache_available: bool,
 }
 
 #[derive(Clone)]
@@ -78,7 +81,9 @@ fn is_media(path: &Path) -> bool {
 
 pub fn scan(root: &Path) -> Result<DuplicateReport, String> {
     if !root.is_dir() { return Err("La carpeta no existe o no es accesible".into()); }
-    let mut report = DuplicateReport { scanned_files: 0, errors: 0, groups: vec![], redundant_bytes: 0 };
+    let mut report = DuplicateReport { scanned_files: 0, errors: 0, groups: vec![], redundant_bytes: 0, cache_hits: 0, hashes_computed: 0, cache_available: false };
+    let cache = crate::hash_cache::HashCache::open(root).ok();
+    report.cache_available = cache.is_some();
     let mut by_size: BTreeMap<u64, Vec<Candidate>> = BTreeMap::new();
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
@@ -99,10 +104,24 @@ pub fn scan(root: &Path) -> Result<DuplicateReport, String> {
     for (_, candidates) in by_size.into_iter().filter(|(_, v)| v.len() > 1) {
         let mut by_hash: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
         for candidate in candidates {
-            match digest(&candidate) {
-                Ok(Some(hash)) => by_hash.entry(hash.to_hex().to_string()).or_default().push(candidate),
-                Ok(None) | Err(_) => report.errors += 1,
-            }
+            let cached = cache.as_ref().and_then(|db| db.get(&candidate.path, candidate.size, candidate.modified).ok().flatten());
+            let hash = if let Some(hex) = cached {
+                if stable(&candidate).unwrap_or(false) {
+                    report.cache_hits += 1;
+                    Some(hex)
+                } else { report.errors += 1; None }
+            } else {
+                match digest(&candidate) {
+                    Ok(Some(hash)) => {
+                        report.hashes_computed += 1;
+                        let hex = hash.to_hex().to_string();
+                        if let Some(db) = &cache { if db.put(&candidate.path, candidate.size, candidate.modified, &hex).is_err() { report.errors += 1; } }
+                        Some(hex)
+                    },
+                    Ok(None) | Err(_) => { report.errors += 1; None },
+                }
+            };
+            if let Some(hex) = hash { by_hash.entry(hex).or_default().push(candidate); }
         }
         for (_, same_hash) in by_hash.into_iter().filter(|(_, v)| v.len() > 1) {
             let mut verified: Vec<Vec<Candidate>> = vec![];
