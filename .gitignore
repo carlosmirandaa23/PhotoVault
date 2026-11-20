@@ -1,0 +1,29 @@
+# Rust
+target/
+**/*.rs.bk
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+coverage/
+
+# Tauri build
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Local user data
+*.db
+*.db-shm
+*.db-wal
+thumbnails/
+photo-library/
+.env
+.env.*
+!.env.example
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
