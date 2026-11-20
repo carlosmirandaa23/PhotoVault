@@ -145,7 +145,7 @@ mod tests {
                 if !path.is_file() { continue; }
                 inspected_files += 1;
                 let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                let mut parts = stem.splitn(3, '_');
+                let mut parts = stem.split('_').filter(|part| !part.is_empty());
                 let family = parts.next().unwrap_or("");
                 let variant = parts.next().unwrap_or("");
                 if !matches!(family, "F01" | "F02" | "F03" | "F04" | "F05")
