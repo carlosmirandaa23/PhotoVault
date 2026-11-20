@@ -81,7 +81,7 @@ fn orientation_hashes(path: &Path) -> Result<[u64; 8], String> {
     let mut hashes = [0u64; 8];
     for (i, oriented) in orientations.iter().enumerate() {
         hashes[i] = phash_luma(oriented);
-        hashes[i+4] = phash_luma(&image::imageops::flip_horizontal(oriented));
+        hashes[i+4] = phash_luma(&image::imageops::flip_horizontal(*oriented));
     }
     Ok(hashes)
 }
