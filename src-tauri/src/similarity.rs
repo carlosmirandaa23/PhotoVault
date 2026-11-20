@@ -281,6 +281,38 @@ mod tests {
                 for example in false_positives { println!("  {example}"); }
             }
         }
+        println!("Comparación del detector con rotaciones/espejos (umbral base 8, orientación 4):");
+        let started = std::time::Instant::now();
+        let oriented: Vec<[u64;8]> = images.par_iter()
+            .map(|(_,_,p)| orientation_hashes(p).expect("No se pudo calcular huella orientada"))
+            .collect();
+        let (mut tp,mut fp,mut fn_,mut tn) = (0u32,0u32,0u32,0u32);
+        let mut examples = Vec::new();
+        for i in 0..images.len() {
+            for j in i+1..images.len() {
+                let standard = (oriented[i][0] ^ oriented[j][0]).count_ones();
+                let rotated = orientation_distance(&oriented[i],&oriented[j]);
+                let predicted = standard <= THRESHOLD || rotated <= 4;
+                match (images[i].0 == images[j].0,predicted) {
+                    (true,true) => tp += 1,
+                    (false,true) => {
+                        fp += 1;
+                        if examples.len() < 12 {
+                            examples.push(format!("{} <> {} (pHash {standard}, orientado {rotated})",
+                                images[i].2.display(),images[j].2.display()));
+                        }
+                    },
+                    (true,false) => fn_ += 1,
+                    (false,false) => tn += 1,
+                }
+            }
+        }
+        let precision = if tp+fp==0 {1.0} else {tp as f64/(tp+fp) as f64};
+        let recall = if tp+fn_==0 {1.0} else {tp as f64/(tp+fn_) as f64};
+        println!("Orientado: TP={tp}, FP={fp}, FN={fn_}, TN={tn}, precisión={:.2}%, recall={:.2}%, cálculo={:?}",
+            precision*100.0,recall*100.0,started.elapsed());
+        println!("Ejemplos de falsos positivos del detector orientado:");
+        for example in examples { println!("  {example}"); }
         println!("Distancia al ORIGINAL por variante:");
         let mut by_variant: BTreeMap<String,Vec<u32>> = BTreeMap::new();
         for i in 0..images.len() {
