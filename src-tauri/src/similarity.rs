@@ -24,25 +24,33 @@ pub struct SimilarityReport {
     pub threshold: u32,
 }
 
-fn phash(path: &Path) -> Result<u64, String> {
-    let reader = ImageReader::open(path).map_err(|e| e.to_string())?;
-    let img = reader.decode().map_err(|e| e.to_string())?
-        .resize_exact(32, 32, FilterType::Triangle).to_luma8();
-    let mut coefficients = [0f64; 64];
+// Separable 2D DCT. Cosines are computed once per call, not per pixel/coefficient.
+// Keep the exact coefficient ordering and median rule of the original pHash.
+fn phash_luma(img: &image::GrayImage) -> u64 {
+    let mut cos = [[0.0f64; 32]; 8];
     for u in 0..8 {
-        for v in 0..8 {
-            let mut sum = 0f64;
-            for y in 0..32 {
-                for x in 0..32 {
-                    let pixel = img.get_pixel(x, y)[0] as f64;
-                    sum += pixel * (std::f64::consts::PI * (2*x+1) as f64 * u as f64 / 64.0).cos()
-                        * (std::f64::consts::PI * (2*y+1) as f64 * v as f64 / 64.0).cos();
-                }
-            }
-            coefficients[(u*8+v) as usize] = sum;
+        for x in 0..32 {
+            cos[u][x] = (std::f64::consts::PI * (2*x+1) as f64 * u as f64 / 64.0).cos();
         }
     }
-    // Exclude DC from the median to reduce global brightness sensitivity.
+    let mut horizontal = [[0.0f64; 32]; 8];
+    for u in 0..8 {
+        for y in 0..32 {
+            let mut sum = 0.0;
+            for x in 0..32 {
+                sum += img.get_pixel(x as u32, y as u32)[0] as f64 * cos[u][x];
+            }
+            horizontal[u][y] = sum;
+        }
+    }
+    let mut coefficients = [0.0f64; 64];
+    for u in 0..8 {
+        for v in 0..8 {
+            let mut sum = 0.0;
+            for y in 0..32 { sum += horizontal[u][y] * cos[v][y]; }
+            coefficients[u*8+v] = sum;
+        }
+    }
     let mut values = coefficients[1..].to_vec();
     values.sort_by(|a,b| a.total_cmp(b));
     let median = values[values.len()/2];
@@ -50,7 +58,38 @@ fn phash(path: &Path) -> Result<u64, String> {
     for (i, coefficient) in coefficients.iter().enumerate() {
         if i > 0 && *coefficient > median { hash |= 1u64 << i; }
     }
-    Ok(hash)
+    hash
+}
+
+fn phash(path: &Path) -> Result<u64, String> {
+    let reader = ImageReader::open(path).map_err(|e| e.to_string())?;
+    let img = reader.decode().map_err(|e| e.to_string())?
+        .resize_exact(32, 32, FilterType::Triangle).to_luma8();
+    Ok(phash_luma(&img))
+}
+
+// Eight orientations (four rotations, each optionally mirrored). Each image is
+// decoded once, then its 32x32 grayscale thumbnail is transformed in memory.
+fn orientation_hashes(path: &Path) -> Result<[u64; 8], String> {
+    let reader = ImageReader::open(path).map_err(|e| e.to_string())?;
+    let img = reader.decode().map_err(|e| e.to_string())?
+        .resize_exact(32, 32, FilterType::Triangle).to_luma8();
+    let r90 = image::imageops::rotate90(&img);
+    let r180 = image::imageops::rotate180(&img);
+    let r270 = image::imageops::rotate270(&img);
+    let orientations = [&img, &r90, &r180, &r270];
+    let mut hashes = [0u64; 8];
+    for (i, oriented) in orientations.iter().enumerate() {
+        hashes[i] = phash_luma(oriented);
+        hashes[i+4] = phash_luma(&image::imageops::flip_horizontal(oriented));
+    }
+    Ok(hashes)
+}
+
+fn orientation_distance(a: &[u64;8], b: &[u64;8]) -> u32 {
+    // Compare canonical reference orientation to all eight of the other image.
+    // Relative orientations cover the same transformation group, avoiding 64 checks.
+    b.iter().map(|h| (a[0] ^ h).count_ones()).min().unwrap_or(64)
 }
 
 pub fn scan(root: &Path, cancel: &AtomicBool, mut progress: impl FnMut(u64,u64)) -> Result<SimilarityReport,String> {
@@ -78,14 +117,14 @@ pub fn scan(root: &Path, cancel: &AtomicBool, mut progress: impl FnMut(u64,u64))
     let total = paths.len() as u64;
     // Process images in bounded parallel batches; emit progress on the calling thread.
     // Preserve deterministic path order and check cancellation between batches.
-    let mut fingerprints: Vec<(PathBuf,u64)> = Vec::new();
+    let mut fingerprints: Vec<(PathBuf,[u64;8])> = Vec::new();
     let mut processed = 0u64;
     progress(0,total);
     for batch in paths.chunks(32) {
         if cancel.load(Ordering::Relaxed) { return Err("Análisis cancelado".into()); }
         let outcomes: Vec<_> = batch.par_iter().map(|path| {
             if cancel.load(Ordering::Relaxed) { return None; }
-            Some((path.clone(), phash(path)))
+            Some((path.clone(), orientation_hashes(path)))
         }).collect();
         for outcome in outcomes {
             match outcome {
@@ -102,8 +141,11 @@ pub fn scan(root: &Path, cancel: &AtomicBool, mut progress: impl FnMut(u64,u64))
     for i in 0..fingerprints.len() {
         if cancel.load(Ordering::Relaxed) { return Err("Análisis cancelado".into()); }
         for j in (i+1)..fingerprints.len() {
-            let distance = (fingerprints[i].1 ^ fingerprints[j].1).count_ones();
-            if distance <= THRESHOLD {
+            let standard_distance = (fingerprints[i].1[0] ^ fingerprints[j].1[0]).count_ones();
+            // Require a tighter threshold for rotated/mirrored candidates.
+            let rotated_distance = if standard_distance <= THRESHOLD { standard_distance } else { orientation_distance(&fingerprints[i].1, &fingerprints[j].1) };
+            if standard_distance <= THRESHOLD || rotated_distance <= 4 {
+                let distance = rotated_distance;
                 pairs.push(SimilarPair {
                     first: fingerprints[i].0.to_string_lossy().into_owned(),
                     second: fingerprints[j].0.to_string_lossy().into_owned(),
@@ -125,6 +167,48 @@ mod tests {
         image::GrayImage::from_fn(64,64,|x,y| image::Luma([((x*3+y*7)%256) as u8])).save(&path).unwrap();
         assert_eq!(phash(&path).unwrap(), phash(&path).unwrap());
         fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn separable_dct_matches_reference() {
+        let img = image::GrayImage::from_fn(32,32,|x,y| image::Luma([((x*17+y*31+x*y)%256) as u8]));
+        let mut coefficients = [0f64;64];
+        for u in 0..8 {
+            for v in 0..8 {
+                let mut sum = 0f64;
+                for y in 0..32 {
+                    for x in 0..32 {
+                        let pixel = img.get_pixel(x,y)[0] as f64;
+                        sum += pixel * (std::f64::consts::PI*(2*x+1) as f64*u as f64/64.0).cos()
+                            * (std::f64::consts::PI*(2*y+1) as f64*v as f64/64.0).cos();
+                    }
+                }
+                coefficients[u*8+v] = sum;
+            }
+        }
+        let mut values = coefficients[1..].to_vec();
+        values.sort_by(|a,b| a.total_cmp(b));
+        let median = values[values.len()/2];
+        let mut reference = 0u64;
+        for (i,c) in coefficients.iter().enumerate() {
+            if i>0 && *c>median { reference |= 1u64 << i; }
+        }
+        assert_eq!(phash_luma(&img), reference);
+    }
+
+    #[test]
+    fn orientation_hashes_detect_rotation_and_mirror() {
+        let dir = std::env::temp_dir();
+        let base = dir.join(format!("photovault-orientation-{}-a.png",std::process::id()));
+        let turned = dir.join(format!("photovault-orientation-{}-b.png",std::process::id()));
+        let flipped = dir.join(format!("photovault-orientation-{}-c.png",std::process::id()));
+        let img = image::GrayImage::from_fn(128,128,|x,y| image::Luma([((x*13+y*7+(x*y)%113)%256) as u8]));
+        img.save(&base).unwrap();
+        image::imageops::rotate90(&img).save(&turned).unwrap();
+        image::imageops::flip_horizontal(&img).save(&flipped).unwrap();
+        let reference = orientation_hashes(&base).unwrap();
+        assert_eq!(orientation_distance(&reference,&orientation_hashes(&turned).unwrap()),0);
+        assert_eq!(orientation_distance(&reference,&orientation_hashes(&flipped).unwrap()),0);
+        for p in [base,turned,flipped] { fs::remove_file(p).unwrap(); }
     }
     /// Benchmark the 65-image fixture. Not a pass/fail quality gate yet:
     /// report precision/recall and false positives before changing algorithms.
