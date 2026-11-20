@@ -42,6 +42,24 @@ jobs:
           fi
       - name: Build frontend
         run: npm run build
+      - name: Generate temporary Tauri test icon when missing
+        if: ${{ inputs.rust_tests }}
+        run: |
+          if [ ! -f src-tauri/icons/icon.png ]; then
+            echo "::warning::Tauri icon is missing from Git; generating a temporary test-only PNG."
+            mkdir -p src-tauri/icons
+            python3 - <<'PY'
+          import struct, zlib
+          from pathlib import Path
+          width = height = 32
+          pixel = bytes((28, 35, 54, 255))
+          raw = b"".join(b"\x00" + pixel * width for _ in range(height))
+          def chunk(kind, payload):
+              return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload) & 0xffffffff)
+          png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+          Path("src-tauri/icons/icon.png").write_bytes(png)
+          PY
+          fi
       - name: Rust unit tests
         if: ${{ inputs.rust_tests }}
         run: |
