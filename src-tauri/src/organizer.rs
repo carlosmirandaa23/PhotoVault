@@ -145,7 +145,30 @@ pub fn plan(root:&Path)->Result<OrganizationPlan,String> {
     paths.truncate(MAX_FILES);
     let mut files=Vec::with_capacity(paths.len());
     for path in paths {
-        match inspect(&path){Ok(item)=>files.push(item),Err(_)=>errors+=1}
+        match inspect(&path){
+            Ok(mut item)=>{
+                if let Ok(Some(saved))=crate::decisions::get(root,&path) {
+                    if saved.content_changed {
+                        item.reason=format!("Decisión anterior: {}. Archivo modificado: requiere nueva revisión. {}",saved.decision,item.reason);
+                    } else {
+                        match saved.decision.as_str(){
+                            "keep"|"photo"=>{
+                                item.category=Category::Photo;
+                                item.suggested_folder="_Conservar (decisión del usuario)".into();
+                            }
+                            "snapshot"=>{
+                                item.category=Category::Snapshot;
+                                item.suggested_folder="Snapshots (decisión del usuario)".into();
+                            }
+                            _=>{}
+                        }
+                        item.reason=format!("Decisión del usuario: {}. {}",saved.decision,item.reason);
+                    }
+                }
+                files.push(item);
+            }
+            Err(_)=>errors+=1
+        }
     }
     Ok(OrganizationPlan{analyzed:files.len(),skipped,errors,files,read_only:true})
 }
