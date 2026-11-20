@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::{collections::BTreeMap, fs, path::PathBuf};
 
+mod duplicates;
+
 #[derive(Serialize)]
 struct ScanSummary {
     root: String,
@@ -12,8 +14,6 @@ struct ScanSummary {
 
 const MEDIA: &[&str] = &["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff", "heic", "heif", "avif", "dng", "cr2", "nef", "arw", "raf", "orf", "rw2", "mp4", "mov", "avi", "mkv", "mts", "3gp"];
 
-/// Read-only inventory. Does not follow directory symlinks or open media content.
-/// Note: cancellation and streaming progress will be added in M1.
 #[tauri::command]
 fn scan_folder(root: String) -> Result<ScanSummary, String> {
     let path = PathBuf::from(&root);
@@ -46,11 +46,18 @@ fn scan_folder(root: String) -> Result<ScanSummary, String> {
     Ok(result)
 }
 
+#[tauri::command]
+async fn find_exact_duplicates(root: String) -> Result<duplicates::DuplicateReport, String> {
+    tauri::async_runtime::spawn_blocking(move || duplicates::scan(&PathBuf::from(root)))
+        .await
+        .map_err(|e| format!("Error en el análisis: {e}"))?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![scan_folder])
+        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates])
         .run(tauri::generate_context!())
         .expect("No se pudo iniciar PhotoVault");
 }
