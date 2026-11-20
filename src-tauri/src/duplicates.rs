@@ -6,6 +6,7 @@ use std::{
     io::{self, BufReader, Read},
     path::{Path, PathBuf},
     time::SystemTime,
+    sync::atomic::{AtomicBool, Ordering},
 };
 
 #[derive(Debug, Serialize)]
@@ -43,12 +44,13 @@ fn stable(file: &Candidate) -> io::Result<bool> {
     Ok(after.size == file.size && after.modified == file.modified)
 }
 
-fn digest(file: &Candidate) -> io::Result<Option<blake3::Hash>> {
+fn digest(file: &Candidate, cancel: &AtomicBool) -> io::Result<Option<blake3::Hash>> {
     if !stable(file)? { return Ok(None); }
     let mut reader = BufReader::new(File::open(&file.path)?);
     let mut hasher = blake3::Hasher::new();
     let mut buffer = [0u8; 65536];
     loop {
+        if cancel.load(Ordering::Relaxed) { return Err(io::Error::new(io::ErrorKind::Interrupted, "Cancelado")); }
         let n = reader.read(&mut buffer)?;
         if n == 0 { break; }
         hasher.update(&buffer[..n]);
@@ -59,13 +61,14 @@ fn digest(file: &Candidate) -> io::Result<Option<blake3::Hash>> {
 
 /// Full byte comparison is mandatory before grouping. Both inputs are checked
 /// before and after the comparison. No deletion is performed.
-fn equal_bytes(a: &Candidate, b: &Candidate) -> io::Result<bool> {
+fn equal_bytes(a: &Candidate, b: &Candidate, cancel: &AtomicBool) -> io::Result<bool> {
     if a.size != b.size || !stable(a)? || !stable(b)? { return Ok(false); }
     let mut left = BufReader::new(File::open(&a.path)?);
     let mut right = BufReader::new(File::open(&b.path)?);
     let mut x = [0u8; 65536];
     let mut y = [0u8; 65536];
     loop {
+        if cancel.load(Ordering::Relaxed) { return Err(io::Error::new(io::ErrorKind::Interrupted, "Cancelado")); }
         let nx = left.read(&mut x)?;
         let ny = right.read(&mut y)?;
         if nx != ny || x[..nx] != y[..ny] { return Ok(false); }
@@ -80,15 +83,29 @@ fn is_media(path: &Path) -> bool {
 }
 
 pub fn scan(root: &Path) -> Result<DuplicateReport, String> {
+    scan_with_progress(root, &AtomicBool::new(false), |_, _, _| {})
+}
+
+/// Progress is expressed in candidate files processed, not elapsed time.
+pub fn scan_with_progress(
+    root: &Path,
+    cancel: &AtomicBool,
+    mut progress: impl FnMut(&str, u64, u64),
+) -> Result<DuplicateReport, String> {
+    let check = || if cancel.load(Ordering::Relaxed) { Err("Análisis cancelado".to_string()) } else { Ok(()) };
+    check()?;
     if !root.is_dir() { return Err("La carpeta no existe o no es accesible".into()); }
     let mut report = DuplicateReport { scanned_files: 0, errors: 0, groups: vec![], redundant_bytes: 0, cache_hits: 0, hashes_computed: 0, cache_available: false };
     let cache = crate::hash_cache::HashCache::open(root).ok();
     report.cache_available = cache.is_some();
     let mut by_size: BTreeMap<u64, Vec<Candidate>> = BTreeMap::new();
     let mut stack = vec![root.to_path_buf()];
+    progress("inventario", 0, 0);
     while let Some(dir) = stack.pop() {
+        check()?;
         let entries = match fs::read_dir(&dir) { Ok(v) => v, Err(_) => { report.errors += 1; continue; } };
         for entry in entries {
+            check()?;
             let entry = match entry { Ok(v) => v, Err(_) => { report.errors += 1; continue; } };
             let kind = match entry.file_type() { Ok(v) => v, Err(_) => { report.errors += 1; continue; } };
             if kind.is_symlink() { continue; }
@@ -101,9 +118,14 @@ pub fn scan(root: &Path) -> Result<DuplicateReport, String> {
             }
         }
     }
+    let total: u64 = by_size.values().filter(|v| v.len() > 1).map(|v| v.len() as u64).sum();
+    let mut processed = 0u64;
+    progress("hashes", 0, total);
     for (_, candidates) in by_size.into_iter().filter(|(_, v)| v.len() > 1) {
+        check()?;
         let mut by_hash: BTreeMap<String, Vec<Candidate>> = BTreeMap::new();
         for candidate in candidates {
+            check()?;
             let cached = cache.as_ref().and_then(|db| db.get(&candidate.path, candidate.size, candidate.modified).ok().flatten());
             let hash = if let Some(hex) = cached {
                 if stable(&candidate).unwrap_or(false) {
@@ -111,26 +133,33 @@ pub fn scan(root: &Path) -> Result<DuplicateReport, String> {
                     Some(hex)
                 } else { report.errors += 1; None }
             } else {
-                match digest(&candidate) {
+                match digest(&candidate, cancel) {
                     Ok(Some(hash)) => {
                         report.hashes_computed += 1;
                         let hex = hash.to_hex().to_string();
                         if let Some(db) = &cache { if db.put(&candidate.path, candidate.size, candidate.modified, &hex).is_err() { report.errors += 1; } }
                         Some(hex)
                     },
-                    Ok(None) | Err(_) => { report.errors += 1; None },
+                    Ok(None) => { report.errors += 1; None },
+                    Err(e) if e.kind() == io::ErrorKind::Interrupted => return Err("Análisis cancelado".into()),
+                    Err(_) => { report.errors += 1; None },
                 }
             };
             if let Some(hex) = hash { by_hash.entry(hex).or_default().push(candidate); }
+            processed += 1;
+            if processed % 20 == 0 || processed == total { progress("hashes", processed, total); }
         }
         for (_, same_hash) in by_hash.into_iter().filter(|(_, v)| v.len() > 1) {
+            check()?;
             let mut verified: Vec<Vec<Candidate>> = vec![];
             for candidate in same_hash {
+                check()?;
                 let mut placed = false;
                 for group in &mut verified {
-                    match equal_bytes(&group[0], &candidate) {
+                    match equal_bytes(&group[0], &candidate, cancel) {
                         Ok(true) => { group.push(candidate.clone()); placed = true; break; }
                         Ok(false) => {}
+                        Err(e) if e.kind() == io::ErrorKind::Interrupted => return Err("Análisis cancelado".into()),
                         Err(_) => { report.errors += 1; }
                     }
                 }
@@ -148,6 +177,8 @@ pub fn scan(root: &Path) -> Result<DuplicateReport, String> {
             }
         }
     }
+    check()?;
+    progress("finalizado", total, total);
     report.groups.sort_by(|a,b| a.paths[0].cmp(&b.paths[0]));
     Ok(report)
 }
