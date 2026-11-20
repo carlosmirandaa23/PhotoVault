@@ -12,13 +12,47 @@ type DuplicateReport = { scanned_files: number; errors: number; groups: Duplicat
 const fmt = (n: number) => n.toLocaleString("es-MX");
 const gb = (n: number) => (n / 1073741824).toFixed(2) + " GB";
 
+// Reuse thumbnails for repeated files and bound decoding work.
+// The cache is scoped to one similarity scan and holds at most 120 entries.
+const previewCache = new Map<string, Promise<string>>();
+const previewQueue: Array<() => void> = [];
+let activePreviews = 0;
+const MAX_ACTIVE_PREVIEWS = 3;
+function schedulePreview(task: () => Promise<string>): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      activePreviews++;
+      task().then(resolve, reject).finally(() => {
+        activePreviews--;
+        previewQueue.shift()?.();
+      });
+    };
+    if (activePreviews < MAX_ACTIVE_PREVIEWS) run();
+    else previewQueue.push(run);
+  });
+}
+function loadPreview(root: string, path: string): Promise<string> {
+  const key = JSON.stringify([root, path]);
+  const existing = previewCache.get(key);
+  if (existing) return existing;
+  const request = schedulePreview(() => invoke<string>("preview_photo", { root, path }));
+  previewCache.set(key, request);
+  // Remove failed loads so a later attempt can retry.
+  void request.catch(() => { if (previewCache.get(key) === request) previewCache.delete(key); });
+  if (previewCache.size > 120) {
+    const oldest = previewCache.keys().next().value;
+    if (oldest !== undefined) previewCache.delete(oldest);
+  }
+  return request;
+}
+
 function PhotoPreview({ root, path }: { root: string; path: string }) {
   const [src, setSrc] = useState("");
   const [failed, setFailed] = useState(false);
   useEffect(() => {
     let active = true;
     setSrc(""); setFailed(false);
-    invoke<string>("preview_photo", { root, path })
+    loadPreview(root, path)
       .then(value => { if (active) setSrc(value); })
       .catch(() => { if (active) setFailed(true); });
     return () => { active = false; };
@@ -68,7 +102,7 @@ export default function App() {
   }
   async function checkSimilar() {
     if (!folder || busy) return;
-    setBusy(true); setError(""); setSimilar(null); setVisiblePairs(20); setProgress({ phase: "preparando", processed: 0, total: 0 }); setCancelling(false);
+    setBusy(true); setError(""); setSimilar(null); previewCache.clear(); setVisiblePairs(20); setProgress({ phase: "preparando", processed: 0, total: 0 }); setCancelling(false);
     let unlisten: (() => void) | undefined;
     try {
       unlisten = await listen<ScanProgress>("photovault:scan-progress", event => setProgress(event.payload));
