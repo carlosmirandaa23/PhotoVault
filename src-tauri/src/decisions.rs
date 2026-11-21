@@ -57,21 +57,30 @@ pub fn save(root:&Path,path:&Path,decision:&str)->Result<(),String>{
     }
     Ok(())
 }
-pub fn get(root:&Path,path:&Path)->Result<Option<Decision>,String>{
-    let actual=checked_path(root,path)?;
-    let db=database(root)?;
-    let stored:Option<(String,String,String,String)>=db.query_row(
-        "SELECT decision,size,modified_ns,reviewed_at FROM decisions WHERE path=?1",
-        params![actual.to_string_lossy().as_ref()],
-        |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))
-    ).optional().map_err(|e|e.to_string())?;
-    match stored {
-        None=>Ok(None),
-        Some((decision,size,stamp,reviewed_at))=>{
-            let (current_size,current_stamp)=fingerprint(&actual)?;
-            Ok(Some(Decision{decision,reviewed_at,content_changed:size!=current_size||stamp!=current_stamp}))
+/// One open database for many lookups (e.g. a whole organization plan).
+pub struct Store { root: PathBuf, db: Connection }
+impl Store {
+    pub fn open(root:&Path)->Result<Self,String>{
+        Ok(Store{ root:root.canonicalize().map_err(|e|e.to_string())?, db:database(root)? })
+    }
+    pub fn get(&self,path:&Path)->Result<Option<Decision>,String>{
+        let actual=checked_path(&self.root,path)?;
+        let stored:Option<(String,String,String,String)>=self.db.query_row(
+            "SELECT decision,size,modified_ns,reviewed_at FROM decisions WHERE path=?1",
+            params![actual.to_string_lossy().as_ref()],
+            |row|Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?))
+        ).optional().map_err(|e|e.to_string())?;
+        match stored {
+            None=>Ok(None),
+            Some((decision,size,stamp,reviewed_at))=>{
+                let (current_size,current_stamp)=fingerprint(&actual)?;
+                Ok(Some(Decision{decision,reviewed_at,content_changed:size!=current_size||stamp!=current_stamp}))
+            }
         }
     }
+}
+pub fn get(root:&Path,path:&Path)->Result<Option<Decision>,String>{
+    Store::open(root)?.get(path)
 }
 #[cfg(test)]
 mod tests{
