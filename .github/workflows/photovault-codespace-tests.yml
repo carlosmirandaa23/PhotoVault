@@ -9,10 +9,9 @@ on:
         required: true
         type: choice
         options:
-          - feature/perceptual-similarity
-          - develop
           - main
-        default: feature/perceptual-similarity
+          - develop
+        default: main
       rust_tests:
         description: "Run Rust unit tests (requires Tauri Linux dependencies)"
         required: true

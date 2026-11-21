@@ -27,3 +27,4 @@ photo-library/
 .idea/
 .DS_Store
 Thumbs.db
+*.tsbuildinfo

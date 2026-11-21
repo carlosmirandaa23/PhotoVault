@@ -1,0 +1,23 @@
+{
+  "name": "PhotoVault - pruebas ligeras",
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "files.watcherExclude": {
+          "**/node_modules/**": true,
+          "**/src-tauri/target/**": true
+        },
+        "search.exclude": {
+          "**/node_modules": true,
+          "**/src-tauri/target": true
+        }
+      }
+    }
+  },
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "8gb"
+  },
+  "postCreateCommand": "echo 'Entorno listo. Las instalaciones y pruebas se ejecutan manualmente para controlar consumo.'",
+  "remoteUser": "codespace"
+}

@@ -1,7 +1,23 @@
 use serde::Serialize;
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use base64::Engine;
+use image::imageops::FilterType;
+use std::io::Cursor;
+use std::{collections::BTreeMap, fs, path::PathBuf, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}};
+use tauri::{Emitter, State};
 
+mod cleanup;
+mod decisions;
 mod duplicates;
+mod hash_cache;
+mod hybrid_policy;
+mod organizer;
+mod similarity;
+
+#[derive(Default)]
+struct ScanState(Mutex<Option<Arc<AtomicBool>>>);
+
+#[derive(Clone, serde::Serialize)]
+struct ScanProgress { phase: String, processed: u64, total: u64 }
 
 #[derive(Serialize)]
 struct ScanSummary {
@@ -47,17 +63,123 @@ fn scan_folder(root: String) -> Result<ScanSummary, String> {
 }
 
 #[tauri::command]
-async fn find_exact_duplicates(root: String) -> Result<duplicates::DuplicateReport, String> {
-    tauri::async_runtime::spawn_blocking(move || duplicates::scan(&PathBuf::from(root)))
-        .await
-        .map_err(|e| format!("Error en el análisis: {e}"))?
+async fn find_exact_duplicates(
+    root: String,
+    app: tauri::AppHandle,
+    state: State<'_, ScanState>,
+) -> Result<duplicates::DuplicateReport, String> {
+    let token = Arc::new(AtomicBool::new(false));
+    {
+        let mut slot = state.0.lock().map_err(|_| "Estado de análisis no disponible")?;
+        if slot.is_some() { return Err("Ya hay un análisis en curso".into()); }
+        *slot = Some(token.clone());
+    }
+    let token_for_work = token.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        duplicates::scan_with_progress(&PathBuf::from(root), &token_for_work, |phase, processed, total| {
+            let _ = app.emit("photovault:scan-progress", ScanProgress {
+                phase: phase.to_owned(), processed, total
+            });
+        })
+    }).await.map_err(|e| format!("Error en el análisis: {e}"));
+    if let Ok(mut slot) = state.0.lock() { *slot = None; }
+    result?
+}
+
+#[tauri::command]
+async fn find_similar_photos(
+    root: String,
+    app: tauri::AppHandle,
+    state: State<'_, ScanState>,
+) -> Result<similarity::SimilarityReport, String> {
+    let token = Arc::new(AtomicBool::new(false));
+    {
+        let mut slot = state.0.lock().map_err(|_| "Estado de análisis no disponible")?;
+        if slot.is_some() { return Err("Ya hay un análisis en curso".into()); }
+        *slot = Some(token.clone());
+    }
+    let token_for_work = token.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        similarity::scan(&PathBuf::from(root), &token_for_work, |processed,total| {
+            let _ = app.emit("photovault:scan-progress", ScanProgress {
+                phase: "similitud".to_owned(), processed, total
+            });
+        })
+    }).await.map_err(|e| format!("Error en el análisis: {e}"));
+    if let Ok(mut slot) = state.0.lock() { *slot = None; }
+    result?
+}
+
+#[tauri::command]
+async fn save_photo_decision(root: String, path: String, decision: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || decisions::save(&PathBuf::from(root), &PathBuf::from(path), &decision))
+        .await.map_err(|e| format!("No se pudo guardar la decisión: {e}"))?
+}
+
+#[tauri::command]
+async fn get_photo_decision(root: String, path: String) -> Result<Option<decisions::Decision>, String> {
+    tauri::async_runtime::spawn_blocking(move || decisions::get(&PathBuf::from(root), &PathBuf::from(path)))
+        .await.map_err(|e| format!("No se pudo consultar la decisión: {e}"))?
+}
+
+#[tauri::command]
+async fn preview_organization(root: String) -> Result<organizer::OrganizationPlan, String> {
+    tauri::async_runtime::spawn_blocking(move || organizer::plan(&PathBuf::from(root)))
+        .await.map_err(|e| format!("Error en la planificación: {e}"))?
+}
+
+#[tauri::command]
+async fn preview_photo(root: String, path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let root = PathBuf::from(root).canonicalize().map_err(|e| e.to_string())?;
+        let path = PathBuf::from(path).canonicalize().map_err(|e| e.to_string())?;
+        if !path.starts_with(&root) || !path.is_file() {
+            return Err("La fotografía está fuera de la carpeta seleccionada".into());
+        }
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        if !["jpg","jpeg","png","webp","bmp","gif","tif","tiff"].contains(&ext.as_str()) {
+            return Err("Formato no compatible con miniaturas".into());
+        }
+        let img = image::open(&path).map_err(|e| format!("No se pudo abrir la fotografía: {e}"))?;
+        let thumb = img.resize(360, 240, FilterType::Triangle);
+        let mut bytes = Cursor::new(Vec::new());
+        thumb.write_to(&mut bytes, image::ImageFormat::Jpeg)
+            .map_err(|e| format!("No se pudo generar miniatura: {e}"))?;
+        Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes.into_inner())))
+    }).await.map_err(|e| format!("Error al generar miniatura: {e}"))?
+}
+
+#[tauri::command]
+async fn trash_duplicates(root: String, groups: Vec<cleanup::CleanupGroup>) -> Result<cleanup::CleanupResult, String> {
+    tauri::async_runtime::spawn_blocking(move || cleanup::move_duplicates_to_trash(&PathBuf::from(root), groups))
+        .await.map_err(|e| format!("Error en la limpieza: {e}"))?
+}
+
+#[tauri::command]
+async fn cleanup_history(root: String) -> Result<Vec<cleanup::BatchSummary>, String> {
+    tauri::async_runtime::spawn_blocking(move || cleanup::history(&PathBuf::from(root)))
+        .await.map_err(|e| format!("No se pudo leer el historial: {e}"))?
+}
+
+#[tauri::command]
+async fn restore_cleanup(root: String, batch_id: String) -> Result<cleanup::RestoreResult, String> {
+    tauri::async_runtime::spawn_blocking(move || cleanup::restore_batch(&PathBuf::from(root), &batch_id))
+        .await.map_err(|e| format!("Error al restaurar: {e}"))?
+}
+
+#[tauri::command]
+fn cancel_duplicate_scan(state: State<'_, ScanState>) -> Result<(), String> {
+    let slot = state.0.lock().map_err(|_| "Estado de análisis no disponible")?;
+    if let Some(token) = slot.as_ref() { token.store(true, Ordering::Relaxed); }
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(ScanState::default())
         .plugin(tauri_plugin_dialog::init())
-        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates])
+        .invoke_handler(tauri::generate_handler![scan_folder, find_exact_duplicates, find_similar_photos, preview_organization, save_photo_decision, get_photo_decision, preview_photo, cancel_duplicate_scan, trash_duplicates, cleanup_history, restore_cleanup])
         .run(tauri::generate_context!())
         .expect("No se pudo iniciar PhotoVault");
 }

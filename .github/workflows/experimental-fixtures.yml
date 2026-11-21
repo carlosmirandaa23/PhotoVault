@@ -1,0 +1,33 @@
+name: PhotoVault experimental fixture tests
+
+on:
+  push:
+    branches:
+      - experiment/crop-orb-ransac
+    paths:
+      - 'experiments/generar_pruebas_photovault.py'
+      - 'experiments/test_generar_pruebas.py'
+      - '.github/workflows/experimental-fixtures.yml'
+  pull_request:
+    paths:
+      - 'experiments/generar_pruebas_photovault.py'
+      - 'experiments/test_generar_pruebas.py'
+      - '.github/workflows/experimental-fixtures.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fixture-generator:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install Pillow
+        run: python -m pip install 'Pillow>=11,<13'
+      - name: Run fixture regression tests
+        run: python -m unittest discover -s experiments -p 'test_*.py' -v
