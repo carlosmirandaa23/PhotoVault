@@ -16,14 +16,21 @@ El script aportado por el usuario, `organizar_fotos.py`, clasifica en `Fotos`, `
 - Sin operaciones de copia, movimiento, renombrado ni borrado.
 - Límite de 20 000 archivos por análisis; el resto se contabiliza como omitido.
 
-## Diferencias pendientes con respecto al script original
+## Segunda fase: EXIF y eventos
 
-1. **EXIF**: todavía no se leen `DateTimeOriginal`, modelo, ISO, exposición, etc. Por ello, ninguna clasificación debe considerarse definitiva; en particular una fotografía de cámara sin EXIF detectado puede parecer captura o «posible basura».
-2. **Eventos**: aún no se implementa agrupación por brecha temporal ni umbral de evento; se propone organización por mes cuando hay fecha en el nombre.
-3. **Videos**: no se extrae metadata de contenedor; se usa fecha del nombre solamente.
-4. **Formatos RAW/HEIC**: la primera versión del planificador no inspecciona formatos sin decodificador compatible.
-5. **Fechas**: no se toma `mtime` como fecha de captura porque puede representar una copia o descarga. Se mostrará la procedencia de cada fecha cuando se agregue EXIF.
-6. **Operaciones reales**: no existe botón para mover archivos. Requerirá revisión individual, simulación, confirmación explícita, verificación de espacio, prevención de colisiones, registro reversible y manejo de errores.
+- **Fecha de captura**: EXIF `DateTimeOriginal` (o `DateTimeDigitized`/`DateTime`) → fecha en el nombre (`YYYYMMDD`, `YYYYMMDD_HHMMSS`, `YYYY-MM-DD`, `WhatsApp Image … at HH.MM.SS`) → desconocida. Se muestra la procedencia. `mtime` nunca se usa.
+- **Cámara**: marca y modelo EXIF. Una foto con EXIF de cámara se clasifica como fotografía aunque sea pequeña o tenga un nombre desconocido.
+- **Capturas**: la proporción solo cuenta si es de pantalla de teléfono alargada (18:9 a 21:9) y no hay EXIF de cámara. 4:3, 3:2 y 16:9 son formatos normales de cámara.
+- **Nombres de cámara**: se reconocen también `YYYYMMDD_HHMMSS` (Samsung/Android), `P10…`, `GOPR`, `DJI_`.
+- **Eventos**: fotos y videos fechados se ordenan por hora; una brecha de más de 12 h separa eventos; los de 20 archivos o más van a `Fotos/AAAA/AAAA-MM-DD Evento`, el resto a `Fotos/AAAA/AAAA-MM`. Ambos valores son configurables (`organizer::Options`).
+- **Decisiones**: una sola conexión SQLite por análisis. «Conservar» y «Es fotografía» ahora participan en la agrupación por fecha.
+
+## Pendiente
+
+1. **Videos**: la fecha sale solo del nombre; falta leer metadatos de MP4/MOV.
+2. **HEIC/RAW**: se lee EXIF de HEIC cuando existe, pero no hay miniaturas ni dimensiones.
+3. **Zona horaria**: las horas EXIF se tratan como hora local sin zona.
+4. **Operaciones reales**: no existe botón para mover archivos. Requerirá vista previa, confirmación, verificación de espacio, prevención de colisiones, registro reversible y manejo de errores (como la limpieza de duplicados).
 
 ## Principios de seguridad
 

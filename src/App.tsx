@@ -7,8 +7,8 @@ import { FolderOpen, Images, ScanSearch, ShieldCheck, AlertTriangle, ArrowRight,
 
 type ScanSummary = { root: string; files: number; bytes: number; errors: number; by_extension: Record<string, number> };
 type SimilarityReport = { analyzed: number; skipped: number; errors: number; threshold: number; pairs: { first: string; second: string; distance: number }[] };
-type PlannedFile = { path: string; category: "photo" | "snapshot" | "possible_trash" | "undated" | "video"; suggested_folder: string; reason: string; date_source: string; width: number | null; height: number | null };
-type OrganizationPlan = { analyzed: number; skipped: number; errors: number; files: PlannedFile[]; read_only: boolean };
+type PlannedFile = { path: string; category: "photo" | "snapshot" | "possible_trash" | "undated" | "video"; suggested_folder: string; reason: string; date_source: "exif" | "nombre" | "no_verificada"; date: string | null; camera: string | null; width: number | null; height: number | null };
+type OrganizationPlan = { analyzed: number; skipped: number; errors: number; events: number; files: PlannedFile[]; read_only: boolean };
 type ScanProgress = { phase: string; processed: number; total: number };
 type DuplicateGroup = { size_bytes: number; paths: string[] };
 type DuplicateReport = { scanned_files: number; errors: number; groups: DuplicateGroup[]; redundant_bytes: number; cache_hits: number; hashes_computed: number; cache_available: boolean };
@@ -135,7 +135,7 @@ function OrganizationItem({ root, file }: { root: string; file: PlannedFile }) {
   return <div className="duplicate-group">
     <strong style={{overflowWrap:"anywhere"}}>{file.path.split(/[\\/]/).pop()}</strong>
     <p>{file.reason}</p>
-    <p>Destino sugerido: <strong>{file.suggested_folder}</strong> · Fecha: {file.date_source}{file.width && file.height ? ` · ${file.width} × ${file.height}` : ""}</p>
+    <p>Destino sugerido: <strong>{file.suggested_folder}</strong> · Fecha: {file.date ? `${file.date} (${file.date_source === "exif" ? "EXIF" : "del nombre del archivo"})` : "desconocida"}{file.camera ? ` · Cámara: ${file.camera}` : ""}{file.width && file.height ? ` · ${file.width} × ${file.height}` : ""}</p>
     {saved && <p><strong>Tu decisión anterior: {names[saved.decision] ?? saved.decision}</strong> · {saved.reviewed_at}{saved.content_changed ? " · El archivo cambió desde la revisión: confirmar nuevamente" : " · Archivo sin cambios detectados"}</p>}
     <div className="actions" style={{flexWrap:"wrap"}}>
       <button className="secondary" disabled={saving} onClick={() => decide("keep")}>Conservar</button>
@@ -259,8 +259,8 @@ export default function App() {
       {page === "organize" && !organization && !busy && <section className="panel"><p>Prepara una propuesta sin cambios sobre tus archivos. La detección de basura es solo una advertencia, no una orden de borrado.</p></section>}
       {page === "organize" && organization && <section className="panel">
         <h2>Propuesta de organización · Solo lectura</h2>
-        <p>Archivos analizados: {fmt(organization.analyzed)} · Omitidos por límite: {fmt(organization.skipped)} · Errores: {fmt(organization.errors)}</p>
-        <p>La fecha se extrae del nombre cuando existe. Esta versión todavía no verifica EXIF ni agrupa eventos; las carpetas son sugerencias provisionales. Tus decisiones se guardan en SQLite fuera de las fotos; ningún archivo se mueve, renombra ni elimina.</p>
+        <p>Archivos analizados: {fmt(organization.analyzed)} · Eventos detectados: {fmt(organization.events)} · Omitidos por límite: {fmt(organization.skipped)} · Errores: {fmt(organization.errors)}</p>
+        <p>La fecha sale del EXIF de la foto y, si no lo tiene, del nombre del archivo; nunca de la fecha de modificación. Las fotos separadas por menos de 12 horas forman un evento, y los eventos de 20 archivos o más reciben su propia carpeta; el resto se agrupa por mes. Tus decisiones se guardan fuera de las fotos. Esto es solo una propuesta: ningún archivo se mueve, renombra ni elimina.</p>
         <div className="actions" style={{ flexWrap: "wrap" }}>
           <button className={organizeFilter === "all" ? "" : "secondary"} onClick={() => setOrganizeFilter("all")}>Todos ({fmt(organization.files.length)})</button>
           {organizationCategories.map(({key,title}) => <button key={key} className={organizeFilter === key ? "" : "secondary"} onClick={() => setOrganizeFilter(key)}>{title} ({fmt(organization.files.filter(f => f.category === key).length)})</button>)}
